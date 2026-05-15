@@ -1,0 +1,511 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>HOLOGRID // H3 TERRAIN RECON</title>
+
+<!-- CESIUM_BASE_URL must be set BEFORE Cesium.js loads so it knows where to
+     fetch its Workers/, Assets/, Widgets/, and ThirdParty/ folders.
+     Without this, the script loads but the globe never renders. -->
+<script>window.CESIUM_BASE_URL = 'https://cdnjs.cloudflare.com/ajax/libs/cesium/1.133.1/';</script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/cesium/1.133.1/Cesium.js"></script>
+<link href="https://cdnjs.cloudflare.com/ajax/libs/cesium/1.133.1/Widgets/widgets.css" rel="stylesheet">
+<script src="https://unpkg.com/h3-js@4.1.0/dist/h3-js.umd.js"></script>
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@300;400;500;600&family=Major+Mono+Display&display=swap" rel="stylesheet">
+
+<style>
+  :root {
+    --cy: #00e5ff;
+    --cy-dim: #00a3b8;
+    --cy-faint: rgba(0, 229, 255, 0.18);
+    --amber: #ffb74d;
+    --ink: #d6f4ff;
+    --ink-dim: #6a9bb0;
+    --bg: #000308;
+  }
+
+  html, body {
+    margin: 0; padding: 0;
+    width: 100%; height: 100%;
+    background: var(--bg);
+    font-family: 'IBM Plex Mono', monospace;
+    color: var(--ink);
+    overflow: hidden;
+  }
+
+  #cesiumContainer {
+    position: absolute; inset: 0;
+    width: 100%; height: 100%;
+  }
+  /* nuke default Cesium chrome remnants */
+  .cesium-viewer-bottom, .cesium-widget-credits { display: none !important; }
+  .cesium-viewer { background: var(--bg) !important; }
+
+  /* ----- HUD ----- */
+  .hud {
+    position: absolute;
+    pointer-events: none;
+    color: var(--cy);
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 11px;
+    letter-spacing: 0.08em;
+    text-shadow: 0 0 6px rgba(0, 229, 255, 0.55), 0 0 14px rgba(0, 229, 255, 0.25);
+    opacity: 0;
+    animation: hud-in 1.2s cubic-bezier(0.2, 0.8, 0.2, 1) 0.4s forwards;
+  }
+  .hud.tr { animation-delay: 0.6s; }
+  .hud.bl { animation-delay: 0.8s; }
+  .hud.br { animation-delay: 1.0s; }
+
+  @keyframes hud-in {
+    from { opacity: 0; transform: translateY(4px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+
+  .tl { top: 20px; left: 22px; }
+  .tr { top: 20px; right: 22px; text-align: right; }
+  .bl { bottom: 22px; left: 22px; }
+  .br { bottom: 22px; right: 22px; text-align: right; }
+
+  .panel {
+    position: relative;
+    padding: 10px 14px;
+    background: linear-gradient(180deg, rgba(0,30,40,0.55), rgba(0,15,25,0.35));
+    border: 1px solid var(--cy-faint);
+    backdrop-filter: blur(2px);
+  }
+  /* corner ticks — that bracketed HUD feel */
+  .panel::before, .panel::after,
+  .panel > .bk1, .panel > .bk2 {
+    content: '';
+    position: absolute;
+    width: 10px; height: 10px;
+    border: 1px solid var(--cy);
+  }
+  .panel::before { top: -1px; left: -1px; border-right: none; border-bottom: none; }
+  .panel::after  { top: -1px; right: -1px; border-left: none; border-bottom: none; }
+  .panel > .bk1  { bottom: -1px; left: -1px; border-right: none; border-top: none; }
+  .panel > .bk2  { bottom: -1px; right: -1px; border-left: none; border-top: none; }
+
+  .title {
+    font-family: 'Major Mono Display', 'IBM Plex Mono', monospace;
+    font-size: 18px;
+    letter-spacing: 0.18em;
+    color: var(--cy);
+    text-shadow: 0 0 10px rgba(0, 229, 255, 0.7);
+  }
+  .subtitle {
+    font-size: 9.5px;
+    color: var(--ink-dim);
+    margin-top: 4px;
+    letter-spacing: 0.22em;
+    text-shadow: none;
+  }
+
+  .row { display: flex; justify-content: space-between; gap: 18px; padding: 2px 0; }
+  .row .k { color: var(--ink-dim); letter-spacing: 0.18em; text-shadow: none; }
+  .row .v { color: var(--cy); font-weight: 500; }
+  .row .v.warn { color: var(--amber); text-shadow: 0 0 6px rgba(255, 183, 77, 0.5); }
+
+  .keys { font-size: 10px; line-height: 1.7; color: var(--ink-dim); text-shadow: none; }
+  .keys kbd {
+    display: inline-block;
+    padding: 1px 6px;
+    background: rgba(0, 229, 255, 0.08);
+    border: 1px solid var(--cy-faint);
+    color: var(--cy);
+    font-family: inherit;
+    font-size: 9.5px;
+    margin: 0 2px;
+  }
+
+  .blink::after {
+    content: '▍';
+    margin-left: 4px;
+    animation: blink 1.05s steps(2, end) infinite;
+    color: var(--cy);
+  }
+  @keyframes blink { 50% { opacity: 0; } }
+
+  /* one-shot scanline traversal on load — sets the mood, then disappears */
+  .scan {
+    position: absolute;
+    left: 0; right: 0;
+    top: 0;
+    height: 2px;
+    background: linear-gradient(90deg, transparent, var(--cy) 50%, transparent);
+    opacity: 0.55;
+    pointer-events: none;
+    animation: scan-down 2.4s ease-out 0.2s 1 forwards;
+  }
+  @keyframes scan-down {
+    0%   { top: -2px; opacity: 0; }
+    8%   { opacity: 0.7; }
+    92%  { opacity: 0.7; }
+    100% { top: 100%; opacity: 0; }
+  }
+
+  /* vignette to deepen the holotable feel */
+  .vignette {
+    position: absolute; inset: 0;
+    pointer-events: none;
+    background: radial-gradient(ellipse at center, transparent 55%, rgba(0,0,0,0.6) 100%);
+    z-index: 2;
+  }
+
+  /* loading splash */
+  #boot {
+    position: absolute; inset: 0;
+    background: var(--bg);
+    display: flex; align-items: center; justify-content: center;
+    z-index: 10;
+    color: var(--cy);
+    font-family: 'Major Mono Display', monospace;
+    font-size: 14px;
+    letter-spacing: 0.3em;
+    text-shadow: 0 0 12px rgba(0,229,255,0.7);
+    transition: opacity 0.8s ease;
+  }
+  #boot.gone { opacity: 0; pointer-events: none; }
+</style>
+</head>
+<body>
+
+<div id="cesiumContainer"></div>
+<div class="vignette"></div>
+
+<!-- HUD: top-left title -->
+<div class="hud tl">
+  <div class="panel">
+    <span class="bk1"></span><span class="bk2"></span>
+    <div class="title">HOLOGRID</div>
+    <div class="subtitle">H3 // DSM CONTOUR RECON v0.1</div>
+  </div>
+</div>
+
+<!-- HUD: top-right controls -->
+<div class="hud tr">
+  <div class="panel">
+    <span class="bk1"></span><span class="bk2"></span>
+    <div class="keys">
+      <div>NAV &nbsp; <kbd>L-DRAG</kbd> pan &nbsp; <kbd>R-DRAG</kbd> tilt &nbsp; <kbd>WHEEL</kbd> zoom</div>
+      <div>LOD &nbsp; auto-adjusts by altitude</div>
+    </div>
+  </div>
+</div>
+
+<!-- HUD: bottom-left telemetry -->
+<div class="hud bl">
+  <div class="panel">
+    <span class="bk1"></span><span class="bk2"></span>
+    <div class="row"><span class="k">ALT</span><span class="v" id="alt">— m</span></div>
+    <div class="row"><span class="k">H3·RES</span><span class="v" id="res">—</span></div>
+    <div class="row"><span class="k">CELLS</span><span class="v" id="cells">—</span></div>
+    <div class="row"><span class="k">HDG</span><span class="v" id="hdg">— °</span></div>
+  </div>
+</div>
+
+<!-- HUD: bottom-right coords -->
+<div class="hud br">
+  <div class="panel">
+    <span class="bk1"></span><span class="bk2"></span>
+    <div class="row"><span class="k">LAT</span><span class="v" id="lat">—</span></div>
+    <div class="row"><span class="k">LON</span><span class="v" id="lon">—</span></div>
+    <div class="row"><span class="k">STATUS</span><span class="v blink" id="status">SCAN</span></div>
+  </div>
+</div>
+
+<div class="scan"></div>
+
+<div id="boot">INITIALIZING HOLOGRID</div>
+
+<script>
+(async function init() {
+
+  // Sanity check — if the CDNs were blocked or the URLs broke, fail loudly.
+  // Note: must use window.h3 to avoid TDZ collision with later `const h3` ref.
+  if (typeof Cesium === 'undefined') {
+    throw new Error('CesiumJS failed to load from CDN. Check network / try a different CDN.');
+  }
+  if (typeof window.h3 === 'undefined') {
+    throw new Error('h3-js failed to load from CDN.');
+  }
+
+  // ============================================================
+  // CESIUM ION TOKEN
+  // The default token shipped with CesiumJS works for casual demos
+  // but is rate-limited. For real use: get your own free token at
+  // https://ion.cesium.com/ and paste it here:
+  // Cesium.Ion.defaultAccessToken = 'YOUR_TOKEN_HERE';
+  // ============================================================
+
+  const viewer = new Cesium.Viewer('cesiumContainer', {
+    animation: false,
+    timeline: false,
+    baseLayerPicker: false,
+    geocoder: false,
+    homeButton: false,
+    sceneModePicker: false,
+    navigationHelpButton: false,
+    fullscreenButton: false,
+    infoBox: false,
+    selectionIndicator: false,
+    shouldAnimate: true,
+  });
+
+  const scene = viewer.scene;
+  const globe = scene.globe;
+
+  // ---------- Hologram styling ----------
+  // Cyan elevation contour painted directly onto the terrain
+  globe.material = Cesium.Material.fromType('ElevationContour', {
+    spacing: 150,
+    color: Cesium.Color.fromCssColorString('#00e5ff'),
+    width: 1.6,
+  });
+  globe.baseColor = Cesium.Color.fromCssColorString('#001428');
+
+  // Kill everything that breaks the holo look
+  scene.skyAtmosphere.show = false;
+  globe.showGroundAtmosphere = false;
+  globe.enableLighting = false;
+  scene.fog.enabled = false;
+  globe.showWaterEffect = false;
+  scene.backgroundColor = Cesium.Color.fromCssColorString('#000308');
+  scene.skyBox.show = false;
+  // Hide the default imagery — we want pure contour-on-dark
+  viewer.imageryLayers.removeAll();
+
+  // Post-processing bloom for the glow
+  const bloom = scene.postProcessStages.bloom;
+  bloom.enabled = true;
+  bloom.uniforms.glowOnly = false;
+  bloom.uniforms.contrast = 128;
+  bloom.uniforms.brightness = -0.3;
+  bloom.uniforms.delta = 1.0;
+  bloom.uniforms.sigma = 3.5;
+  bloom.uniforms.stepSize = 1.2;
+
+  // Starting camera — Colombian Andes for max contour drama
+  viewer.camera.setView({
+    destination: Cesium.Cartesian3.fromDegrees(-75.6, 6.0, 180000),
+    orientation: {
+      heading: Cesium.Math.toRadians(20),
+      pitch: Cesium.Math.toRadians(-45),
+      roll: 0,
+    },
+  });
+
+  // ============================================================
+  // H3 grid: dynamic LOD by camera altitude, capped cell count
+  // (h3 is exposed as a global by the h3-js UMD bundle)
+  // ============================================================
+  const cellEntities = new Map();
+  const MAX_CELLS = 3500;
+
+  function pickResolution(h) {
+    if (h > 6_000_000) return 0;
+    if (h > 2_500_000) return 1;
+    if (h > 900_000)   return 2;
+    if (h > 320_000)   return 3;
+    if (h > 110_000)   return 4;
+    if (h > 38_000)    return 5;
+    if (h > 13_000)    return 6;
+    if (h > 4_500)     return 7;
+    return 8;
+  }
+
+  // Antimeridian-safe: split rect into 1 or 2 polygons in [lat,lng] order
+  function rectToPolygons(rect) {
+    const w = Cesium.Math.toDegrees(rect.west);
+    const e = Cesium.Math.toDegrees(rect.east);
+    const s = Cesium.Math.toDegrees(rect.south);
+    const n = Cesium.Math.toDegrees(rect.north);
+
+    if (w <= e) {
+      return [[[s, w], [n, w], [n, e], [s, e]]];
+    }
+    return [
+      [[s, w], [n, w], [n, 179.999], [s, 179.999]],
+      [[s, -179.999], [n, -179.999], [n, e], [s, e]],
+    ];
+  }
+
+  function altitudeColor(elev) {
+    // map elevation to a cool->warm cyan->mint->amber ramp, but stay holographic
+    const t = Cesium.Math.clamp(elev / 4500, 0, 1);
+    // hue from 188° (cyan) toward 165° (mint) toward 50° (amber) as elevation climbs
+    const hue = t < 0.6
+      ? Cesium.Math.lerp(188, 165, t / 0.6) / 360
+      : Cesium.Math.lerp(165, 50, (t - 0.6) / 0.4) / 360;
+    const light = 0.42 + t * 0.18;
+    return Cesium.Color.fromHsl(hue, 1.0, light, 0.16);
+  }
+
+  let updateSeq = 0;
+
+  async function updateHexGrid() {
+    const mySeq = ++updateSeq;
+    const rect = viewer.camera.computeViewRectangle();
+    if (!rect) return;
+
+    const camHeight = viewer.camera.positionCartographic.height;
+    let res = pickResolution(camHeight);
+    const polys = rectToPolygons(rect);
+
+    let cells = [];
+    for (const p of polys) {
+      try { cells = cells.concat(h3.polygonToCells(p, res)); } catch (_) {}
+    }
+
+    // Back off if we'd exceed the cap (camera is panned out wider than expected)
+    while (cells.length > MAX_CELLS && res > 0) {
+      res -= 1;
+      cells = [];
+      for (const p of polys) {
+        try { cells = cells.concat(h3.polygonToCells(p, res)); } catch (_) {}
+      }
+    }
+
+    // Dedup (antimeridian split can produce overlaps at the seam)
+    cells = Array.from(new Set(cells));
+
+    setText('res', `R${res}`);
+    setText('cells', cells.length.toLocaleString());
+
+    // Diff against currently-rendered set
+    const visible = new Set(cells);
+    for (const [id, ent] of cellEntities) {
+      if (!visible.has(id)) {
+        viewer.entities.remove(ent);
+        cellEntities.delete(id);
+      }
+    }
+
+    const fresh = cells.filter(c => !cellEntities.has(c));
+    if (!fresh.length) return;
+
+    // Sample terrain at each new cell's centroid so the polygon sits on the ground
+    const centroids = fresh.map(c => {
+      const [lat, lng] = h3.cellToLatLng(c);
+      return Cesium.Cartographic.fromDegrees(lng, lat);
+    });
+
+    let sampled;
+    try {
+      sampled = await Cesium.sampleTerrainMostDetailed(viewer.terrainProvider, centroids);
+    } catch (_) {
+      sampled = centroids.map(() => ({ height: 0 }));
+    }
+
+    // If the camera moved meaningfully while we were awaiting, bail —
+    // a newer update has superseded us
+    if (mySeq !== updateSeq) return;
+
+    fresh.forEach((id, i) => {
+      const boundary = h3.cellToBoundary(id); // [[lat, lng], ...]
+      const elev = sampled[i]?.height ?? 0;
+      const coords = boundary.flatMap(([lat, lng]) => [lng, lat, elev + 6]);
+
+      const fill = altitudeColor(elev);
+
+      const ent = viewer.entities.add({
+        polygon: {
+          hierarchy: Cesium.Cartesian3.fromDegreesArrayHeights(coords),
+          material: fill,
+          outline: true,
+          outlineColor: Cesium.Color.fromCssColorString('#00e5ff').withAlpha(0.85),
+          perPositionHeight: true,
+        },
+      });
+      cellEntities.set(id, ent);
+    });
+  }
+
+  // Debounced camera-move trigger
+  let pending = null;
+  function scheduleUpdate(delay = 180) {
+    setText('status', 'SCAN', false);
+    clearTimeout(pending);
+    pending = setTimeout(() => {
+      setText('status', 'LOCK', false);
+      updateHexGrid();
+    }, delay);
+  }
+
+  viewer.camera.moveStart.addEventListener(() => setText('status', 'TRACK', true));
+  viewer.camera.moveEnd.addEventListener(() => scheduleUpdate(180));
+
+  // Attach world terrain AFTER updateHexGrid is defined.
+  // When it finishes loading, refresh so cells snap onto real elevations.
+  const terrain = Cesium.Terrain.fromWorldTerrain();
+  terrain.readyEvent.addEventListener(() => {
+    cellEntities.forEach(e => viewer.entities.remove(e));
+    cellEntities.clear();
+    updateHexGrid();
+  });
+  scene.setTerrain(terrain);
+
+  // ============================================================
+  // HUD live telemetry
+  // ============================================================
+  const $ = id => document.getElementById(id);
+
+  function setText(id, val, warn = false) {
+    const el = $(id);
+    if (!el) return;
+    el.textContent = val;
+    el.classList.toggle('warn', !!warn);
+  }
+
+  function fmtDeg(d) {
+    const sign = d >= 0 ? '' : '-';
+    const a = Math.abs(d);
+    return `${sign}${a.toFixed(4)}°`;
+  }
+
+  function fmtMeters(m) {
+    if (m >= 1000) return `${(m / 1000).toFixed(1)} km`;
+    return `${m.toFixed(0)} m`;
+  }
+
+  // Update HUD on every frame — cheap, just text
+  scene.preRender.addEventListener(() => {
+    const c = viewer.camera.positionCartographic;
+    setText('lat', fmtDeg(Cesium.Math.toDegrees(c.latitude)));
+    setText('lon', fmtDeg(Cesium.Math.toDegrees(c.longitude)));
+    setText('alt', fmtMeters(c.height));
+    const hdg = (Cesium.Math.toDegrees(viewer.camera.heading) + 360) % 360;
+    setText('hdg', `${hdg.toFixed(0)}°`);
+  });
+
+  // First paint
+  await updateHexGrid();
+  setText('status', 'LOCK', false);
+
+  // Drop the boot splash
+  const boot = $('boot');
+  boot.classList.add('gone');
+  setTimeout(() => boot.remove(), 900);
+
+})().catch(err => {
+  console.error(err);
+  const boot = document.getElementById('boot');
+  if (boot) {
+    boot.innerHTML =
+      '<div style="text-align:center;max-width:80%;line-height:1.6">' +
+        '<div style="font-size:14px;letter-spacing:0.3em;margin-bottom:14px">INIT FAILED</div>' +
+        '<div style="font-family:\'IBM Plex Mono\',monospace;font-size:11px;letter-spacing:0.05em;color:#ffb74d;text-shadow:0 0 6px rgba(255,183,77,0.5);word-break:break-word">' +
+          (err && err.message ? err.message : String(err)) +
+        '</div>' +
+      '</div>';
+    boot.style.color = '#ffb74d';
+  }
+});
+</script>
+</body>
+</html>
