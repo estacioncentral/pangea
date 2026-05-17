@@ -1,0 +1,54 @@
+{
+  "_comment": "HOLOGRID layer registry. Add/remove entries here to expose new data sources in the LAYERS panel. The id must be unique. Supported types: geojson, xyz, wms, wmts. minAlt/maxAlt are camera-altitude gates in meters (null = no bound). Alpha defaults to style.alpha (geojson) or alpha (raster). For rasters you can also set saturation, contrast, brightness, hue.",
+
+  "services": [
+    {
+      "id": "coast",
+      "name": "COAST",
+      "type": "geojson",
+      "url": "https://raw.githubusercontent.com/martynafford/natural-earth-geojson/master/50m/physical/ne_50m_coastline.json",
+      "style": { "stroke": "#00ffff", "width": 1.5, "alpha": 0.85 },
+      "minAlt": null,
+      "maxAlt": null,
+      "default": true
+    },
+    {
+      "id": "bordr",
+      "name": "BORDR",
+      "type": "geojson",
+      "url": "https://raw.githubusercontent.com/martynafford/natural-earth-geojson/master/50m/cultural/ne_50m_admin_0_boundary_lines_land.json",
+      "style": { "stroke": "#ffb74d", "width": 1.0, "alpha": 0.55 },
+      "minAlt": null,
+      "maxAlt": null,
+      "default": false
+    },
+    {
+      "id": "modis",
+      "name": "MODIS",
+      "type": "wms",
+      "url": "https://gibs.earthdata.nasa.gov/wms/epsg4326/best/wms.cgi",
+      "layers": "MODIS_Terra_CorrectedReflectance_TrueColor",
+      "parameters": { "transparent": "true", "format": "image/png" },
+      "alpha": 0.35,
+      "saturation": 0.4,
+      "brightness": 0.85,
+      "minAlt": 800000,
+      "maxAlt": null,
+      "default": false
+    },
+    {
+      "id": "osm",
+      "name": "OSM",
+      "type": "xyz",
+      "url": "https://tile.openstreetmap.org/{z}/{x}/{y}.png",
+      "maxLevel": 19,
+      "alpha": 0.35,
+      "saturation": 0.2,
+      "brightness": 0.7,
+      "contrast": 1.1,
+      "minAlt": null,
+      "maxAlt": 1500000,
+      "default": false
+    }
+  ]
+}
