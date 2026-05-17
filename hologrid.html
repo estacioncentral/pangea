@@ -1,0 +1,1525 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>HOLOGRID // H3 TERRAIN RECON</title>
+
+<script>window.CESIUM_BASE_URL = 'https://cdnjs.cloudflare.com/ajax/libs/cesium/1.133.1/';</script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/cesium/1.133.1/Cesium.js"></script>
+<link href="https://cdnjs.cloudflare.com/ajax/libs/cesium/1.133.1/Widgets/widgets.css" rel="stylesheet">
+<script src="https://unpkg.com/h3-js@4.1.0/dist/h3-js.umd.js"></script>
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@300;400;500;600&family=Major+Mono+Display&display=swap" rel="stylesheet">
+
+<style>
+  :root {
+    --hue: 188;
+    --cy: hsl(var(--hue), 100%, 60%);
+    --cy-dim: hsl(var(--hue), 60%, 40%);
+    --cy-faint: hsla(var(--hue), 100%, 50%, 0.18);
+    --amber: #ffb74d;
+    --red: #ff5050;
+    --ink: hsl(var(--hue), 50%, 92%);
+    --ink-dim: hsl(var(--hue), 22%, 58%);
+    --bg: #000308;
+  }
+
+  html, body {
+    margin: 0; padding: 0; width: 100%; height: 100%;
+    background: var(--bg);
+    font-family: 'IBM Plex Mono', monospace;
+    color: var(--ink);
+    overflow: hidden;
+  }
+  #cesiumContainer { position: absolute; inset: 0; width: 100%; height: 100%; }
+  .cesium-viewer-bottom, .cesium-widget-credits { display: none !important; }
+  .cesium-viewer { background: var(--bg) !important; }
+
+  .hud {
+    position: absolute;
+    pointer-events: none;
+    color: var(--cy);
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 11px;
+    letter-spacing: 0.08em;
+    text-shadow: 0 0 6px hsla(var(--hue), 100%, 50%, 0.55), 0 0 14px hsla(var(--hue), 100%, 50%, 0.25);
+    opacity: 0;
+    animation: hud-in 1.2s cubic-bezier(0.2, 0.8, 0.2, 1) 0.4s forwards;
+  }
+  .hud.deck    { animation-delay: 0.5s; }
+  .hud.thermo  { animation-delay: 0.65s; }
+  .hud.bl      { animation-delay: 0.8s; }
+  .hud.att     { animation-delay: 1.0s; }
+  @keyframes hud-in {
+    from { opacity: 0; transform: translateY(4px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+
+  .tl { top: 18px; left: 20px; }
+  .deck { top: 18px; right: 20px; width: 290px; max-height: calc(100vh - 36px); overflow-y: auto; }
+  .deck::-webkit-scrollbar { width: 5px; }
+  .deck::-webkit-scrollbar-thumb { background: var(--cy-faint); }
+  .thermo { top: 50%; left: 18px; transform: translateY(-50%); }
+  .bl { bottom: 20px; left: 20px; }
+  .att { bottom: 18px; right: 20px; }
+
+  .panel {
+    position: relative;
+    padding: 10px 14px;
+    background: linear-gradient(180deg, rgba(0,30,40,0.55), rgba(0,15,25,0.35));
+    border: 1px solid var(--cy-faint);
+    backdrop-filter: blur(2px);
+  }
+  .panel::before, .panel::after, .panel > .bk1, .panel > .bk2 {
+    content: ''; position: absolute; width: 9px; height: 9px;
+    border: 1px solid var(--cy);
+  }
+  .panel::before { top: -1px; left: -1px; border-right: none; border-bottom: none; }
+  .panel::after  { top: -1px; right: -1px; border-left: none; border-bottom: none; }
+  .panel > .bk1  { bottom: -1px; left: -1px; border-right: none; border-top: none; }
+  .panel > .bk2  { bottom: -1px; right: -1px; border-left: none; border-top: none; }
+
+  .title {
+    font-family: 'Major Mono Display', 'IBM Plex Mono', monospace;
+    font-size: 18px;
+    letter-spacing: 0.18em;
+    color: var(--cy);
+    text-shadow: 0 0 10px hsla(var(--hue), 100%, 50%, 0.7);
+  }
+  .subtitle {
+    font-size: 9.5px; color: var(--ink-dim);
+    margin-top: 4px; letter-spacing: 0.22em; text-shadow: none;
+  }
+
+  .deck-toolbar {
+    display: flex;
+    justify-content: flex-end;
+    gap: 14px;
+    padding: 0 2px 7px;
+    border-bottom: 1px solid hsla(var(--hue), 100%, 50%, 0.08);
+    margin-bottom: 2px;
+  }
+  .deck-action {
+    pointer-events: auto;
+    cursor: pointer;
+    font-size: 8.5px;
+    letter-spacing: 0.2em;
+    color: var(--ink-dim);
+    text-shadow: none;
+    user-select: none;
+    transition: color 0.12s, text-shadow 0.12s;
+  }
+  .deck-action:hover {
+    color: var(--cy);
+    text-shadow: 0 0 5px hsla(var(--hue), 100%, 50%, 0.5);
+  }
+
+  .sec { margin: 0; }
+  .sec-head {
+    font-family: 'Major Mono Display', monospace;
+    font-size: 9.5px;
+    letter-spacing: 0.32em;
+    color: var(--cy);
+    border-bottom: 1px solid var(--cy-faint);
+    padding: 4px 2px 3px;
+    margin: 10px 0 6px;
+    text-shadow: 0 0 6px hsla(var(--hue), 100%, 50%, 0.5);
+    pointer-events: auto;
+    cursor: pointer;
+    display: grid;
+    grid-template-columns: auto 1fr auto;
+    align-items: baseline;
+    gap: 8px;
+    user-select: none;
+    outline: none;
+    transition: background 0.12s ease, border-color 0.12s ease;
+  }
+  .sec-head:hover {
+    background: hsla(var(--hue), 100%, 50%, 0.06);
+  }
+  .sec-head:focus-visible {
+    box-shadow: inset 0 0 0 1px var(--cy);
+  }
+  .sec:first-child .sec-head { margin-top: 4px; }
+  .sec-summary {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 9px;
+    letter-spacing: 0.06em;
+    color: var(--ink-dim);
+    text-shadow: none;
+    font-weight: 400;
+    text-align: right;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    display: none;
+  }
+  .sec-glyph {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 12px;
+    color: var(--cy);
+    font-weight: 600;
+    letter-spacing: 0;
+    min-width: 12px;
+    text-align: center;
+    line-height: 1;
+  }
+  .sec-body {
+    overflow: hidden;
+    max-height: 1500px;
+    opacity: 1;
+    transition: max-height 130ms ease-out, opacity 90ms ease-out, margin 130ms ease-out;
+  }
+  .sec.collapsed .sec-body {
+    max-height: 0;
+    opacity: 0;
+    margin: 0;
+  }
+  .sec.collapsed .sec-head {
+    margin-bottom: 0;
+    border-bottom-color: transparent;
+  }
+  .sec.collapsed .sec-summary { display: block; }
+
+  /* Layer rows — used by the LAYERS section, dynamically populated */
+  .layer-rows { margin: 4px 0 2px; }
+  .layer-row {
+    display: grid;
+    grid-template-columns: 50px 40px 1fr 32px;
+    align-items: center;
+    gap: 6px;
+    margin: 4px 0;
+  }
+  .layer-name {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 9.5px;
+    letter-spacing: 0.14em;
+    color: var(--cy);
+    text-shadow: 0 0 4px hsla(var(--hue), 100%, 50%, 0.4);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .btn.btn-layer {
+    padding: 1px 6px;
+    font-size: 9px;
+    min-width: 36px;
+    letter-spacing: 0.1em;
+  }
+  .layer-row.oor .layer-name { opacity: 0.45; }
+  .layer-row.oor .btn.btn-layer {
+    color: var(--amber);
+    border-color: rgba(255, 183, 77, 0.5);
+    text-shadow: 0 0 4px rgba(255, 183, 77, 0.4);
+  }
+  .layer-row.err .btn.btn-layer {
+    color: var(--red);
+    border-color: rgba(255, 80, 80, 0.5);
+  }
+  .layer-row .slider-val { min-width: 28px; }
+  .layer-msg {
+    font-size: 9px;
+    color: var(--ink-dim);
+    letter-spacing: 0.1em;
+    text-shadow: none;
+    padding: 4px 2px;
+    font-style: italic;
+  }
+
+  .row { display: flex; justify-content: space-between; gap: 14px; padding: 1.5px 0; font-size: 10.5px; }
+  .row .k { color: var(--ink-dim); letter-spacing: 0.18em; text-shadow: none; }
+  .row .v { color: var(--cy); font-weight: 500; }
+  .row .v.warn { color: var(--amber); text-shadow: 0 0 6px rgba(255, 183, 77, 0.5); }
+  .row .v.crit { color: var(--red); text-shadow: 0 0 6px rgba(255, 80, 80, 0.5); }
+
+  .ctrl-row {
+    display: grid;
+    grid-template-columns: 42px 1fr auto;
+    align-items: center;
+    gap: 8px;
+    margin: 3px 0;
+    font-size: 10px;
+  }
+  .k-label { color: var(--ink-dim); letter-spacing: 0.16em; text-shadow: none; }
+  .btn {
+    pointer-events: auto;
+    cursor: pointer;
+    padding: 2px 8px;
+    background: hsla(var(--hue), 100%, 50%, 0.10);
+    border: 1px solid var(--cy);
+    color: var(--cy);
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 9.5px;
+    font-weight: 500;
+    letter-spacing: 0.15em;
+    text-shadow: 0 0 5px hsla(var(--hue), 100%, 50%, 0.5);
+    transition: background 0.15s ease, box-shadow 0.15s ease;
+    text-align: center;
+  }
+  .btn:hover { background: hsla(var(--hue), 100%, 50%, 0.22); box-shadow: 0 0 10px hsla(var(--hue), 100%, 50%, 0.5); }
+  .btn:active { background: hsla(var(--hue), 100%, 50%, 0.35); }
+  .btn.off { color: var(--ink-dim); border-color: var(--cy-faint); background: transparent; text-shadow: none; }
+  .hint { font-size: 9px; color: var(--cy-dim); letter-spacing: 0.1em; text-shadow: none; text-align: right; }
+
+  .slider {
+    pointer-events: auto;
+    -webkit-appearance: none; appearance: none;
+    width: 100%; height: 14px;
+    background: transparent; cursor: pointer; outline: none; margin: 0;
+  }
+  .slider::-webkit-slider-runnable-track { height: 2px; background: linear-gradient(90deg, var(--cy-faint), var(--cy)); border: 0; }
+  .slider::-moz-range-track             { height: 2px; background: linear-gradient(90deg, var(--cy-faint), var(--cy)); border: 0; }
+  .slider::-webkit-slider-thumb { -webkit-appearance: none; appearance: none; width: 10px; height: 10px; margin-top: -4px; background: var(--cy); border: 1px solid var(--cy); border-radius: 0; box-shadow: 0 0 8px var(--cy); }
+  .slider::-moz-range-thumb     { width: 10px; height: 10px; background: var(--cy); border: 1px solid var(--cy); border-radius: 0; box-shadow: 0 0 8px var(--cy); }
+  .slider-val {
+    font-size: 9px; color: var(--cy);
+    min-width: 52px; text-align: right;
+    text-shadow: 0 0 4px hsla(var(--hue), 100%, 50%, 0.4);
+  }
+  .slider-val.warn { color: var(--amber); text-shadow: 0 0 5px rgba(255, 183, 77, 0.5); }
+
+  select.deck-sel {
+    pointer-events: auto;
+    background: hsla(var(--hue), 100%, 50%, 0.06);
+    border: 1px solid var(--cy);
+    color: var(--cy);
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 9.5px;
+    letter-spacing: 0.1em;
+    padding: 3px 6px;
+    width: 100%;
+    cursor: pointer;
+    outline: none;
+    text-shadow: 0 0 4px hsla(var(--hue), 100%, 50%, 0.4);
+  }
+  select.deck-sel option { background: #000a14; color: var(--cy); }
+
+  .thermo .panel { padding: 12px 10px; }
+  .thermo-grid {
+    display: grid; grid-template-columns: 20px 1fr;
+    gap: 4px 6px; font-size: 9.5px; line-height: 1; align-items: center;
+  }
+  .thermo-label {
+    font-family: 'Major Mono Display', monospace;
+    font-size: 9px; letter-spacing: 0.2em;
+    color: var(--cy); text-align: center;
+    margin-bottom: 8px;
+    text-shadow: 0 0 5px hsla(var(--hue), 100%, 50%, 0.6);
+  }
+  .res-tick {
+    width: 14px; height: 8px;
+    background: transparent;
+    border: 1px solid;
+    transition: background 0.2s, box-shadow 0.2s;
+  }
+  .res-tick.on { box-shadow: 0 0 8px currentColor, 0 0 16px currentColor; }
+  .res-name { font-size: 9px; color: var(--ink-dim); letter-spacing: 0.1em; text-shadow: none; }
+  .res-name.on { color: var(--cy); text-shadow: 0 0 4px hsla(var(--hue), 100%, 50%, 0.5); }
+
+  .att .panel { padding: 8px 12px; }
+  .att-svg { display: block; }
+  .att-label {
+    text-align: center; font-size: 9px;
+    margin-top: 4px; letter-spacing: 0.15em;
+    color: var(--cy); text-shadow: 0 0 4px hsla(var(--hue), 100%, 50%, 0.5);
+  }
+  .pitch-ctrl {
+    display: grid;
+    grid-template-columns: 22px 1fr 22px;
+    align-items: center;
+    gap: 6px;
+    margin-top: 6px;
+  }
+  .btn.pitch-step {
+    padding: 1px 0;
+    font-size: 13px;
+    font-weight: 600;
+    letter-spacing: 0;
+    min-height: 18px;
+    line-height: 1;
+  }
+
+  .scan {
+    position: absolute; left: 0; right: 0; top: 0; height: 2px;
+    background: linear-gradient(90deg, transparent, var(--cy) 50%, transparent);
+    opacity: 0.55; pointer-events: none;
+    animation: scan-down 2.4s ease-out 0.2s 1 forwards;
+  }
+  @keyframes scan-down {
+    0% { top: -2px; opacity: 0; }
+    8% { opacity: 0.7; } 92% { opacity: 0.7; }
+    100% { top: 100%; opacity: 0; }
+  }
+  .vignette {
+    position: absolute; inset: 0; pointer-events: none; z-index: 2;
+    background: radial-gradient(ellipse at center, transparent 55%, rgba(0,0,0,0.6) 100%);
+  }
+
+  #boot {
+    position: absolute; inset: 0; background: var(--bg);
+    display: flex; align-items: center; justify-content: center; z-index: 10;
+    color: var(--cy); font-family: 'Major Mono Display', monospace;
+    font-size: 14px; letter-spacing: 0.3em;
+    text-shadow: 0 0 12px hsla(var(--hue), 100%, 50%, 0.7);
+    transition: opacity 0.8s ease;
+  }
+  #boot.gone { opacity: 0; pointer-events: none; }
+</style>
+</head>
+<body>
+
+<div id="cesiumContainer"></div>
+<div class="vignette"></div>
+
+<div class="hud tl">
+  <div class="panel">
+    <span class="bk1"></span><span class="bk2"></span>
+    <div class="title">HOLOGRID</div>
+    <div class="subtitle">H3 // DSM CONTOUR RECON v0.7.1</div>
+  </div>
+</div>
+
+<div class="hud thermo">
+  <div class="panel">
+    <span class="bk1"></span><span class="bk2"></span>
+    <div class="thermo-label">H3·RES</div>
+    <div class="thermo-grid" id="thermo-grid"></div>
+  </div>
+</div>
+
+<div class="hud deck">
+  <div class="panel">
+    <span class="bk1"></span><span class="bk2"></span>
+
+    <div class="deck-toolbar">
+      <span class="deck-action" id="expand-all">[ + ] EXPAND</span>
+      <span class="deck-action" id="collapse-all">[ − ] COLLAPSE</span>
+    </div>
+
+    <div class="sec" data-sec-wrap="toggles">
+      <div class="sec-head" data-sec="toggles" role="button" tabindex="0">
+        <span class="sec-title">// TOGGLES</span>
+        <span class="sec-summary" id="sum-toggles"></span>
+        <span class="sec-glyph">−</span>
+      </div>
+      <div class="sec-body" data-sec-body="toggles">
+        <div class="ctrl-row"><span class="k-label">MAT</span><button class="btn" id="mat-btn">CONTOUR</button><span class="hint">[M]</span></div>
+        <div class="ctrl-row"><span class="k-label">VIEW</span><button class="btn" id="view-btn">OBLIQUE</button><span class="hint">[V]</span></div>
+        <div class="ctrl-row"><span class="k-label">H3</span><button class="btn" id="h3-btn">ON</button><span class="hint">[H]</span></div>
+        <div class="ctrl-row"><span class="k-label">SHADE</span><button class="btn off" id="shade-btn">OFF</button><span class="hint">[S]</span></div>
+      </div>
+    </div>
+
+    <div class="sec" data-sec-wrap="terrain">
+      <div class="sec-head" data-sec="terrain" role="button" tabindex="0">
+        <span class="sec-title">// TERRAIN</span>
+        <span class="sec-summary" id="sum-terrain"></span>
+        <span class="sec-glyph">−</span>
+      </div>
+      <div class="sec-body" data-sec-body="terrain">
+        <div class="ctrl-row"><span class="k-label">CTR·SP</span><input type="range" class="slider" id="ctr-slider" min="50" max="5000" step="50" value="500"><span class="slider-val" id="ctr-val">500m</span></div>
+        <div class="ctrl-row"><span class="k-label">EXAGG</span><input type="range" class="slider" id="exag-slider" min="1" max="5" step="0.1" value="1"><span class="slider-val" id="exag-val">1.0×</span></div>
+        <div class="ctrl-row"><span class="k-label">CUT·H</span><input type="range" class="slider" id="cut-slider" min="0" max="8000" step="50" value="3000"><span class="slider-val" id="cut-val">3000m</span></div>
+        <div class="ctrl-row"><span class="k-label">CUT</span><button class="btn off" id="cut-btn">OFF</button><span class="hint">[C]</span></div>
+      </div>
+    </div>
+
+    <div class="sec" data-sec-wrap="layers">
+      <div class="sec-head" data-sec="layers" role="button" tabindex="0">
+        <span class="sec-title">// LAYERS</span>
+        <span class="sec-summary" id="sum-layers"></span>
+        <span class="sec-glyph">−</span>
+      </div>
+      <div class="sec-body" data-sec-body="layers">
+        <div class="layer-rows" id="layer-rows">
+          <div class="layer-msg" id="layer-msg">loading services…</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="sec" data-sec-wrap="ramp">
+      <div class="sec-head" data-sec="ramp" role="button" tabindex="0">
+        <span class="sec-title">// RAMP</span>
+        <span class="sec-summary" id="sum-ramp"></span>
+        <span class="sec-glyph">−</span>
+      </div>
+      <div class="sec-body" data-sec-body="ramp">
+        <div class="ctrl-row"><span class="k-label">PAL</span><button class="btn" id="pal-btn">SOFT</button><span class="hint">[P]</span></div>
+        <div class="ctrl-row"><span class="k-label">CURVE</span><button class="btn off" id="gam-btn">LINEAR</button><span class="hint">[G]</span></div>
+        <div class="ctrl-row"><span class="k-label">MIN</span><input type="range" class="slider" id="min-slider" min="-1000" max="3000" step="50" value="-500"><span class="slider-val" id="min-val">-500m</span></div>
+        <div class="ctrl-row"><span class="k-label">MAX</span><input type="range" class="slider" id="max-slider" min="1000" max="12000" step="100" value="7000"><span class="slider-val" id="max-val">7000m</span></div>
+        <div class="ctrl-row"><span class="k-label">GAMMA</span><input type="range" class="slider" id="gam-slider" min="30" max="300" step="5" value="100"><span class="slider-val" id="gam-val">1.00</span></div>
+      </div>
+    </div>
+
+    <div class="sec" data-sec-wrap="environment">
+      <div class="sec-head" data-sec="environment" role="button" tabindex="0">
+        <span class="sec-title">// ENVIRONMENT</span>
+        <span class="sec-summary" id="sum-environment"></span>
+        <span class="sec-glyph">−</span>
+      </div>
+      <div class="sec-body" data-sec-body="environment">
+        <div class="ctrl-row"><span class="k-label">DAY</span><input type="range" class="slider" id="day-slider" min="0" max="365" step="1" value="172"><span class="slider-val" id="day-val">JUN 21</span></div>
+        <div class="ctrl-row"><span class="k-label">HOUR</span><input type="range" class="slider" id="hour-slider" min="0" max="24" step="0.25" value="14"><span class="slider-val" id="hour-val">14:00</span></div>
+        <div class="ctrl-row"><span class="k-label">HUD·H</span><input type="range" class="slider" id="hue-slider" min="0" max="360" step="2" value="188"><span class="slider-val" id="hue-val">188°</span></div>
+      </div>
+    </div>
+
+    <div class="sec" data-sec-wrap="collections">
+      <div class="sec-head" data-sec="collections" role="button" tabindex="0">
+        <span class="sec-title">// COLLECTIONS</span>
+        <span class="sec-summary" id="sum-collections"></span>
+        <span class="sec-glyph">−</span>
+      </div>
+      <div class="sec-body" data-sec-body="collections">
+        <div class="ctrl-row" style="grid-template-columns: 42px 1fr;"><span class="k-label">GROUP</span><select class="deck-sel" id="coll-sel"><option value="OFF">OFF — loading…</option></select></div>
+        <div class="ctrl-row" style="grid-template-columns: 42px 1fr;"><span class="k-label">STAT</span><span class="hint" id="coll-stat" style="text-align:left">—</span></div>
+      </div>
+    </div>
+
+    <div class="sec" data-sec-wrap="quality">
+      <div class="sec-head" data-sec="quality" role="button" tabindex="0">
+        <span class="sec-title">// QUALITY</span>
+        <span class="sec-summary" id="sum-quality"></span>
+        <span class="sec-glyph">−</span>
+      </div>
+      <div class="sec-body" data-sec-body="quality">
+        <div class="ctrl-row"><span class="k-label">MESH</span><input type="range" class="slider" id="sse-slider" min="0.5" max="4" step="0.25" value="2"><span class="slider-val" id="sse-val">2.00</span></div>
+        <div class="ctrl-row"><span class="k-label">CACHE</span><button class="btn" id="cache-btn">100</button><span class="hint">tiles</span></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="hud bl">
+  <div class="panel">
+    <span class="bk1"></span><span class="bk2"></span>
+    <div class="row"><span class="k">ALT</span><span class="v" id="alt">— m</span></div>
+    <div class="row"><span class="k">LAT</span><span class="v" id="lat">—</span></div>
+    <div class="row"><span class="k">LON</span><span class="v" id="lon">—</span></div>
+    <div class="row"><span class="k">H3·R</span><span class="v" id="res">—</span></div>
+    <div class="row"><span class="k">CELLS</span><span class="v" id="cells">—</span></div>
+    <div class="row"><span class="k">STATUS</span><span class="v blink" id="status">SCAN</span></div>
+  </div>
+</div>
+
+<div class="hud att">
+  <div class="panel">
+    <span class="bk1"></span><span class="bk2"></span>
+    <svg class="att-svg" viewBox="-50 -50 100 100" width="110" height="110">
+      <defs>
+        <clipPath id="ballClip"><circle r="44" /></clipPath>
+      </defs>
+      <circle r="44" fill="rgba(0,15,25,0.55)" stroke="hsl(188,100%,60%)" stroke-width="1" id="att-ring"/>
+      <g clip-path="url(#ballClip)">
+        <g id="attBall">
+          <rect x="-80" y="-80" width="160" height="80" fill="hsla(188,60%,35%,0.25)" id="att-sky"/>
+          <rect x="-80" y="0" width="160" height="80" fill="hsla(20,70%,40%,0.18)"/>
+          <line x1="-80" y1="0" x2="80" y2="0" stroke="hsl(188,100%,60%)" stroke-width="0.7" id="att-horizon"/>
+          <g stroke="hsl(188,100%,60%)" stroke-width="0.35" fill="hsl(188,100%,60%)" font-size="3.5" font-family="IBM Plex Mono" text-anchor="middle" id="att-ladder">
+            <line x1="-12" y1="-30" x2="12" y2="-30"/>
+            <text x="-18" y="-29">30</text><text x="18" y="-29">30</text>
+            <line x1="-8" y1="-15" x2="8" y2="-15"/>
+            <line x1="-12" y1="30" x2="12" y2="30"/>
+            <text x="-18" y="31">30</text><text x="18" y="31">30</text>
+            <line x1="-8" y1="15" x2="8" y2="15"/>
+          </g>
+        </g>
+      </g>
+      <g stroke="hsl(188,100%,60%)" stroke-width="0.9" fill="hsl(188,100%,60%)" id="att-ref">
+        <line x1="-18" y1="0" x2="-7" y2="0"/>
+        <line x1="7" y1="0" x2="18" y2="0"/>
+        <circle r="1.3"/>
+      </g>
+      <polygon points="0,-44 -2,-40 2,-40" fill="hsl(188,100%,60%)" id="att-tick"/>
+    </svg>
+    <div class="att-label" id="att-label">P 0° · H 0°</div>
+    <div class="pitch-ctrl">
+      <button class="btn pitch-step" id="pitch-minus" type="button">−</button>
+      <input type="range" class="slider" id="pitch-slider" min="-90" max="0" step="1" value="-45">
+      <button class="btn pitch-step" id="pitch-plus" type="button">+</button>
+    </div>
+  </div>
+</div>
+
+<div class="scan"></div>
+<div id="boot">INITIALIZING HOLOGRID</div>
+
+<script>
+(async function init() {
+
+  if (typeof Cesium === 'undefined') throw new Error('CesiumJS failed to load from CDN.');
+  if (typeof window.h3 === 'undefined') throw new Error('h3-js failed to load from CDN.');
+
+  Cesium.Ion.defaultAccessToken = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJqdGkiOiIxZDg4N2JhMy0yYjZmLTQyNWYtOWYxOS0wOTgzYzdiMTAyN2MiLCJpZCI6NDAwNDE5LCJpYXQiOjE3NzMwMDIxMzd9._lZyiTNSuapslmg-vfAwvD3pp0zKtXjW94l3hIpDq_8';
+
+  // ============ utility helpers (declared first; used everywhere) ============
+  const $ = id => document.getElementById(id);
+  function setText(id, val, cls) {
+    const el = $(id); if (!el) return;
+    el.textContent = val;
+    el.classList.remove('warn', 'crit');
+    if (cls) el.classList.add(cls);
+  }
+
+  // ============ terrain ============
+  const terrain = Cesium.Terrain.fromWorldTerrain({ requestVertexNormals: true });
+  terrain.errorEvent.addEventListener((err) => {
+    console.error('Terrain error:', err);
+    setText('status', 'NO TERR', 'crit');
+  });
+
+  const viewer = new Cesium.Viewer('cesiumContainer', {
+    terrain: terrain,
+    baseLayer: false,
+    animation: false, timeline: false, baseLayerPicker: false,
+    geocoder: false, homeButton: false, sceneModePicker: false,
+    navigationHelpButton: false, fullscreenButton: false,
+    infoBox: false, selectionIndicator: false, shouldAnimate: false,
+  });
+
+  const scene = viewer.scene;
+  const globe = scene.globe;
+
+  scene.skyAtmosphere.show = false;
+  globe.showGroundAtmosphere = false;
+  globe.enableLighting = false;
+  scene.fog.enabled = false;
+  globe.showWaterEffect = false;
+  scene.backgroundColor = Cesium.Color.fromCssColorString('#000308');
+  scene.skyBox.show = false;
+  globe.baseColor = Cesium.Color.fromCssColorString('#001428');
+
+  const bloom = scene.postProcessStages.bloom;
+  bloom.enabled = true;
+  bloom.uniforms.glowOnly = false;
+  bloom.uniforms.contrast = 128;
+  bloom.uniforms.brightness = -0.3;
+  bloom.uniforms.sigma = 3.5;
+  bloom.uniforms.stepSize = 1.2;
+
+  viewer.camera.setView({
+    destination: Cesium.Cartesian3.fromDegrees(-75.6, 6.0, 180000),
+    orientation: {
+      heading: Cesium.Math.toRadians(20),
+      pitch: Cesium.Math.toRadians(-45),
+      roll: 0,
+    },
+  });
+
+  // ============ state ============
+  let materialMode = 'CONTOUR';     // NONE | CONTOUR | RAMP
+  let rampPalette  = 'SOFT';
+  let rampMin      = -500;
+  let rampMax      = 7000;
+  let gammaOn      = false;
+  let gammaVal     = 1.0;
+  let contourSp    = 500;
+  let cutoffOn     = false;
+  let cutoffH      = 3000;
+  let exagg        = 1;
+  let shadeOn      = false;
+  let h3On         = true;
+  let viewMode     = 'OBLIQUE';
+  let dayOfYear    = 172;
+  let hourOfDay    = 14;
+  let hudHue       = 188;
+  let activeGroup  = 'OFF';
+  let collections  = null;
+  let groupColors  = new Map();
+  let currentRes   = 0;
+
+  // Quality & layers — added in v0.7
+  let sseValue     = 2.0;          // globe.maximumScreenSpaceError
+  let cacheSize    = 100;          // globe.tileCacheSize
+  const CACHE_PRESETS = [100, 500, 1000, 2000];
+  const layers     = new Map();    // service id → { service, instance, wantedOn, inRange, alpha }
+
+  // ============ ramp canvas ============
+  function getPaletteStops(palette) {
+    if (palette === 'SHARP') {
+      return [
+        [0.00, '#003b5c'], [0.15, '#0077a3'], [0.30, '#00b4d8'],
+        [0.50, '#48f0c0'], [0.70, '#ffe066'], [0.85, '#ff8c42'],
+        [1.00, '#ffffff'],
+      ];
+    } else if (palette === 'SOFT') {
+      return [[0.00, '#004d6e'], [0.40, '#36b8c8'], [0.75, '#a4eaf0'], [1.00, '#d6f4ff']];
+    } else {
+      return [[0.00, '#003b50'], [1.00, '#00e5ff']];
+    }
+  }
+
+  function makeRampCanvas() {
+    const c = document.createElement('canvas');
+    c.width = 256; c.height = 1;
+    const ctx = c.getContext('2d');
+    const total = rampMax - rampMin;
+
+    const seaT = Math.max(0, Math.min(1, (0 - rampMin) / total));
+    const seaPx = Math.round(seaT * 256);
+    const cutT = Math.max(0, Math.min(1, (cutoffH - rampMin) / total));
+    const cutPx = Math.round(cutT * 256);
+
+    if (seaPx > 0) {
+      const blue = ctx.createLinearGradient(0, 0, seaPx, 0);
+      blue.addColorStop(0, '#000c1a');
+      blue.addColorStop(1, '#0099cc');
+      ctx.fillStyle = blue;
+      ctx.fillRect(0, 0, seaPx, 1);
+    }
+
+    const landEnd = cutoffOn ? Math.max(seaPx + 1, cutPx) : 256;
+    if (landEnd > seaPx) {
+      const land = ctx.createLinearGradient(seaPx, 0, landEnd, 0);
+      const stops = getPaletteStops(rampPalette);
+      const g = gammaOn ? gammaVal : 1.0;
+      for (const [t, color] of stops) {
+        const adj = Math.pow(t, 1 / g);
+        land.addColorStop(Math.max(0, Math.min(1, adj)), color);
+      }
+      ctx.fillStyle = land;
+      ctx.fillRect(seaPx, 0, landEnd - seaPx, 1);
+    }
+
+    if (cutoffOn && cutPx < 256) {
+      const red = ctx.createLinearGradient(cutPx, 0, 256, 0);
+      red.addColorStop(0, '#ff2030');
+      red.addColorStop(1, '#ffe0a0');
+      ctx.fillStyle = red;
+      ctx.fillRect(cutPx, 0, 256 - cutPx, 1);
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(Math.max(0, cutPx - 1), 0, 2, 1);
+    }
+
+    return c;
+  }
+
+  function effectiveContourSpacing() {
+    const camH = viewer.camera.positionCartographic.height;
+    const minSp = Math.ceil(camH / 2000 / 50) * 50;
+    return Math.max(contourSp, minSp);
+  }
+
+  function applyHoloStyle() {
+    if (materialMode === 'NONE') {
+      globe.material = undefined;
+    } else if (materialMode === 'CONTOUR') {
+      globe.material = Cesium.Material.fromType('ElevationContour', {
+        spacing: effectiveContourSpacing(),
+        color: Cesium.Color.fromCssColorString('#00ffff'),
+        width: 2.0,
+      });
+    } else if (materialMode === 'RAMP') {
+      // Material samples post-exaggeration heights, so scale the height window by exagg
+      // to keep the gradient mapped to factual elevations (rampMin/rampMax are factual)
+      globe.material = Cesium.Material.fromType('ElevationRamp', {
+        image: makeRampCanvas(),
+        minimumHeight: rampMin * exagg,
+        maximumHeight: rampMax * exagg,
+      });
+    }
+    const b = $('mat-btn');
+    if (b) { b.textContent = materialMode; b.classList.toggle('off', materialMode === 'NONE'); }
+  }
+
+  // ============ H3 grid ============
+  const cellEntities = new Map();
+  const MAX_CELLS = 3500;
+  let updateSeq = 0;
+
+  function pickResolution(h) {
+    if (h > 6_000_000) return 0;
+    if (h > 2_500_000) return 1;
+    if (h > 900_000)   return 2;
+    if (h > 320_000)   return 3;
+    if (h > 110_000)   return 4;
+    if (h > 38_000)    return 5;
+    if (h > 13_000)    return 6;
+    if (h > 4_500)     return 7;
+    return 8;
+  }
+  function rectToPolygons(rect) {
+    const w = Cesium.Math.toDegrees(rect.west);
+    const e = Cesium.Math.toDegrees(rect.east);
+    const s = Cesium.Math.toDegrees(rect.south);
+    const n = Cesium.Math.toDegrees(rect.north);
+    if (w <= e) return [[[s, w], [n, w], [n, e], [s, e]]];
+    return [
+      [[s, w], [n, w], [n, 179.999], [s, 179.999]],
+      [[s, -179.999], [n, -179.999], [n, e], [s, e]],
+    ];
+  }
+
+  function clearCells() {
+    cellEntities.forEach(ents => {
+      if (Array.isArray(ents)) ents.forEach(e => viewer.entities.remove(e));
+      else viewer.entities.remove(ents);
+    });
+    cellEntities.clear();
+  }
+
+  function hudCellColors() {
+    return {
+      fill: Cesium.Color.fromCssColorString(`hsl(${hudHue}, 100%, 60%)`).withAlpha(0.04),
+      line: Cesium.Color.fromCssColorString(`hsl(${hudHue}, 100%, 60%)`).withAlpha(0.75),
+    };
+  }
+  function cellColorForId(cellId, res) {
+    if (activeGroup === 'OFF' || !collections || res < 4) return hudCellColors();
+    let parentId = cellId;
+    if (res > 4) {
+      try { parentId = h3.cellToParent(cellId, 4); } catch (_) { parentId = null; }
+    }
+    if (!parentId) return hudCellColors();
+    const props = collections.get(parentId);
+    if (!props) return hudCellColors();
+    const groupVal = props[activeGroup];
+    const col = groupColors.get(groupVal);
+    if (!col) return hudCellColors();
+    return {
+      fill: Cesium.Color.fromCssColorString(col).withAlpha(0.30),
+      line: Cesium.Color.fromCssColorString(col).withAlpha(0.90),
+    };
+  }
+
+  async function updateHexGrid() {
+    if (!h3On) { clearCells(); setText('cells', '0'); return; }
+    const mySeq = ++updateSeq;
+    const rect = viewer.camera.computeViewRectangle();
+    if (!rect) return;
+
+    const camHeight = viewer.camera.positionCartographic.height;
+    let res = pickResolution(camHeight);
+    const polys = rectToPolygons(rect);
+
+    let cells = [];
+    for (const p of polys) { try { cells = cells.concat(h3.polygonToCells(p, res)); } catch (_) {} }
+    while (cells.length > MAX_CELLS && res > 0) {
+      res -= 1;
+      cells = [];
+      for (const p of polys) { try { cells = cells.concat(h3.polygonToCells(p, res)); } catch (_) {} }
+    }
+    cells = Array.from(new Set(cells));
+    currentRes = res;
+    setText('res', `R${res}`);
+    setText('cells', cells.length.toLocaleString());
+    updateThermometer(res);
+
+    const visible = new Set(cells);
+    for (const [id, ents] of cellEntities) {
+      if (!visible.has(id)) {
+        if (Array.isArray(ents)) ents.forEach(e => viewer.entities.remove(e));
+        else viewer.entities.remove(ents);
+        cellEntities.delete(id);
+      }
+    }
+
+    const fresh = cells.filter(c => !cellEntities.has(c));
+    if (mySeq !== updateSeq) return;
+
+    fresh.forEach((id) => {
+      const boundary = h3.cellToBoundary(id);
+      const flat = boundary.flatMap(([lat, lng]) => [lng, lat]);
+      const positions = Cesium.Cartesian3.fromDegreesArray(flat);
+      const closed = positions.concat([positions[0]]);
+      const { fill, line } = cellColorForId(id, res);
+
+      const entFill = viewer.entities.add({
+        polygon: {
+          hierarchy: positions,
+          material: fill,
+          classificationType: Cesium.ClassificationType.TERRAIN,
+        },
+      });
+      const entLine = viewer.entities.add({
+        polyline: {
+          positions: closed,
+          width: 1.2,
+          material: line,
+          clampToGround: true,
+        },
+      });
+      cellEntities.set(id, [entFill, entLine]);
+    });
+  }
+
+  let pending = null;
+  function scheduleUpdate(delay = 180) {
+    setText('status', 'SCAN');
+    clearTimeout(pending);
+    pending = setTimeout(() => {
+      setText('status', 'LOCK');
+      updateHexGrid();
+      // contour material has an altitude-derived minimum spacing — refresh on big camera moves
+      if (materialMode === 'CONTOUR') applyHoloStyle();
+    }, delay);
+  }
+  viewer.camera.moveStart.addEventListener(() => setText('status', 'TRACK', 'warn'));
+  viewer.camera.moveEnd.addEventListener(() => scheduleUpdate(180));
+
+  // ============ thermometer (#1) ============
+  function resColor(r) {
+    const hue = 280 - (r / 15) * 280;
+    return `hsl(${hue}, 90%, 60%)`;
+  }
+  function buildThermometer() {
+    const grid = $('thermo-grid');
+    grid.innerHTML = '';
+    for (let r = 0; r <= 15; r++) {
+      const t = document.createElement('div');
+      t.className = 'res-tick'; t.dataset.res = r;
+      t.style.color = resColor(r); t.style.borderColor = resColor(r);
+      const n = document.createElement('div');
+      n.className = 'res-name'; n.dataset.res = r;
+      n.textContent = `R${String(r).padStart(2, '0')}`;
+      grid.appendChild(t); grid.appendChild(n);
+    }
+  }
+  function updateThermometer(active) {
+    document.querySelectorAll('.res-tick').forEach(t => {
+      const r = parseInt(t.dataset.res, 10);
+      const on = r === active;
+      t.classList.toggle('on', on);
+      t.style.background = on ? resColor(r) : 'transparent';
+    });
+    document.querySelectorAll('.res-name').forEach(n => {
+      n.classList.toggle('on', parseInt(n.dataset.res, 10) === active);
+    });
+  }
+  buildThermometer();
+
+  // ============ toggles ============
+  function cycleMaterialMode() {
+    materialMode = { CONTOUR: 'RAMP', RAMP: 'NONE', NONE: 'CONTOUR' }[materialMode];
+    applyHoloStyle();
+  }
+  function cyclePalette() {
+    rampPalette = { SOFT: 'SHARP', SHARP: 'MONO', MONO: 'SOFT' }[rampPalette];
+    $('pal-btn').textContent = rampPalette;
+    if (materialMode === 'RAMP') applyHoloStyle();
+  }
+  function toggleH3() {
+    h3On = !h3On;
+    const b = $('h3-btn');
+    b.textContent = h3On ? 'ON' : 'OFF';
+    b.classList.toggle('off', !h3On);
+    if (!h3On) clearCells();
+    else updateHexGrid();
+  }
+  function toggleCutoff() {
+    cutoffOn = !cutoffOn;
+    const b = $('cut-btn');
+    b.textContent = cutoffOn ? 'ON' : 'OFF';
+    b.classList.toggle('off', !cutoffOn);
+    if (materialMode === 'RAMP') applyHoloStyle();
+  }
+  function toggleGamma() {
+    gammaOn = !gammaOn;
+    const b = $('gam-btn');
+    b.textContent = gammaOn ? 'GAMMA' : 'LINEAR';
+    b.classList.toggle('off', !gammaOn);
+    if (materialMode === 'RAMP') applyHoloStyle();
+  }
+  function toggleShade() {
+    shadeOn = !shadeOn;
+    const b = $('shade-btn');
+    b.textContent = shadeOn ? 'ON' : 'OFF';
+    b.classList.toggle('off', !shadeOn);
+    globe.enableLighting = shadeOn;
+    if (shadeOn) updateClock();
+  }
+  function setViewMode(mode) {
+    viewMode = mode;
+    const c = viewer.camera.positionCartographic;
+    const heading = viewer.camera.heading;
+    const pitch = mode === 'TOP' ? -Math.PI / 2 : Cesium.Math.toRadians(-45);
+    viewer.camera.flyTo({
+      destination: Cesium.Cartesian3.fromRadians(c.longitude, c.latitude, c.height),
+      orientation: { heading, pitch, roll: 0 },
+      duration: 1.0,
+    });
+    $('view-btn').textContent = viewMode;
+  }
+  function toggleView() { setViewMode(viewMode === 'OBLIQUE' ? 'TOP' : 'OBLIQUE'); }
+
+  // Pitch slider + stepper — drives camera pitch directly while preserving heading/roll/position
+  const pitchSlider = $('pitch-slider');
+  function setPitch(deg) {
+    const clamped = Math.max(-90, Math.min(0, deg));
+    const c = viewer.camera.positionCartographic;
+    viewer.camera.setView({
+      destination: Cesium.Cartesian3.fromRadians(c.longitude, c.latitude, c.height),
+      orientation: {
+        heading: viewer.camera.heading,
+        pitch: Cesium.Math.toRadians(clamped),
+        roll: viewer.camera.roll,
+      },
+    });
+  }
+  pitchSlider.addEventListener('input', () => setPitch(+pitchSlider.value));
+  $('pitch-minus').addEventListener('click', () => {
+    const v = Math.max(-90, +pitchSlider.value - 5);
+    pitchSlider.value = v;
+    setPitch(v);
+  });
+  $('pitch-plus').addEventListener('click', () => {
+    const v = Math.min(0, +pitchSlider.value + 5);
+    pitchSlider.value = v;
+    setPitch(v);
+  });
+
+  $('mat-btn').addEventListener('click', cycleMaterialMode);
+  $('view-btn').addEventListener('click', toggleView);
+  $('pal-btn').addEventListener('click', cyclePalette);
+  $('h3-btn').addEventListener('click', toggleH3);
+  $('cut-btn').addEventListener('click', toggleCutoff);
+  $('gam-btn').addEventListener('click', toggleGamma);
+  $('shade-btn').addEventListener('click', toggleShade);
+
+  document.addEventListener('keydown', (e) => {
+    if (['INPUT', 'TEXTAREA', 'SELECT'].includes(e.target.tagName)) return;
+    const k = e.key.toLowerCase();
+    if (k === 'm') cycleMaterialMode();
+    else if (k === 'v') toggleView();
+    else if (k === 'p') cyclePalette();
+    else if (k === 'h') toggleH3();
+    else if (k === 'c') toggleCutoff();
+    else if (k === 'g') toggleGamma();
+    else if (k === 's') toggleShade();
+  });
+
+  // ============ sliders ============
+  const sMin = $('min-slider'), sMax = $('max-slider'), sGam = $('gam-slider');
+  const sCtr = $('ctr-slider'), sCut = $('cut-slider'), sExag = $('exag-slider');
+  const sDay = $('day-slider'), sHour = $('hour-slider'), sHue = $('hue-slider');
+
+  function syncRamp() {
+    let mn = +sMin.value, mx = +sMax.value;
+    if (mn >= mx) { mn = mx - 100; sMin.value = mn; }
+    rampMin = mn; rampMax = mx;
+    setText('min-val', `${rampMin}m`);
+    setText('max-val', `${rampMax}m`);
+    if (materialMode === 'RAMP') applyHoloStyle();
+  }
+  function syncGamma() {
+    gammaVal = +sGam.value / 100;
+    setText('gam-val', gammaVal.toFixed(2));
+    if (materialMode === 'RAMP' && gammaOn) applyHoloStyle();
+  }
+  function syncContour() {
+    contourSp = +sCtr.value;
+    const eff = effectiveContourSpacing();
+    const clamped = eff !== contourSp;
+    setText('ctr-val', clamped ? `→${eff}m` : `${contourSp}m`, clamped ? 'warn' : null);
+    if (materialMode === 'CONTOUR') applyHoloStyle();
+  }
+  function syncCutoff() {
+    cutoffH = +sCut.value;
+    setText('cut-val', `${cutoffH}m`);
+    if (materialMode === 'RAMP' && cutoffOn) applyHoloStyle();
+  }
+  function syncExagg() {
+    exagg = +sExag.value;
+    setText('exag-val', `${exagg.toFixed(1)}×`);
+    if ('verticalExaggeration' in scene) scene.verticalExaggeration = exagg;
+    else if ('terrainExaggeration' in globe) globe.terrainExaggeration = exagg;
+    // Re-apply ramp so its min/max get rescaled to match the new exaggeration
+    if (materialMode === 'RAMP') applyHoloStyle();
+  }
+  function dayLabel(d) {
+    const date = new Date(2024, 0, 1 + d);
+    return date.toLocaleString('en-US', { month: 'short', day: 'numeric' }).toUpperCase();
+  }
+  function updateClock() {
+    const date = new Date(Date.UTC(2024, 0, 1 + dayOfYear,
+      Math.floor(hourOfDay),
+      Math.round((hourOfDay - Math.floor(hourOfDay)) * 60), 0));
+    viewer.clock.currentTime = Cesium.JulianDate.fromDate(date);
+  }
+  function syncDate() {
+    dayOfYear = +sDay.value;
+    setText('day-val', dayLabel(dayOfYear));
+    if (shadeOn) updateClock();
+  }
+  function syncHour() {
+    hourOfDay = +sHour.value;
+    const hh = Math.floor(hourOfDay);
+    const mm = Math.round((hourOfDay - hh) * 60);
+    setText('hour-val', `${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')}`);
+    if (shadeOn) updateClock();
+  }
+  function syncHue() {
+    hudHue = +sHue.value;
+    document.documentElement.style.setProperty('--hue', hudHue);
+    setText('hue-val', `${hudHue}°`);
+    // recolor attitude SVG (its strokes are hardcoded since SVG attrs don't take CSS vars consistently)
+    const cy = `hsl(${hudHue}, 100%, 60%)`;
+    const skyc = `hsla(${hudHue}, 60%, 35%, 0.25)`;
+    ['att-ring','att-horizon','att-tick'].forEach(id => {
+      const el = $(id); if (!el) return;
+      if (el.tagName === 'circle' || el.tagName === 'line') el.setAttribute('stroke', cy);
+      if (el.tagName === 'polygon') el.setAttribute('fill', cy);
+    });
+    const lad = $('att-ladder');
+    if (lad) { lad.setAttribute('stroke', cy); lad.setAttribute('fill', cy); }
+    const ref = $('att-ref');
+    if (ref) { ref.setAttribute('stroke', cy); ref.setAttribute('fill', cy); }
+    const sky = $('att-sky'); if (sky) sky.setAttribute('fill', skyc);
+    // Update thermometer non-resolution defaults (the colored ticks stay as the chromatic ramp)
+    // The HUE only affects HUD chrome; H3 cells in non-collection mode also follow it (next paint).
+  }
+
+  sMin.addEventListener('input', syncRamp);
+  sMax.addEventListener('input', syncRamp);
+  sGam.addEventListener('input', syncGamma);
+  sCtr.addEventListener('input', syncContour);
+  sCut.addEventListener('input', syncCutoff);
+  sExag.addEventListener('input', syncExagg);
+  sDay.addEventListener('input', syncDate);
+  sHour.addEventListener('input', syncHour);
+  sHue.addEventListener('input', syncHue);
+
+  // ============ collections (#11) ============
+  const CATEGORY_COLORS = [
+    '#ff4d6d','#ffb74d','#ffe066','#a4f57f','#48f0c0','#36b8c8','#5d8fff','#a96cff',
+    '#ff6cc7','#ffa07a','#c8e87c','#7cd4d4','#e88cff','#ffd28c','#7fe89e','#88c0ff',
+    '#ff8c42','#fff09e','#7fffa1','#6acfff','#c891ff','#ff7676','#cdff7a','#90e3ff',
+    '#ffce5c','#ff9eb3','#a4ffa4','#6bb6ff','#dba1ff','#ff8c8c',
+  ];
+  const COLL_URL = 'collections.geojson';
+  const GROUP_KEYS = ['CONTINENT', 'REGION_WB', 'INCOME_GRP', 'SUBREGION', 'NAME_EN'];
+
+  async function loadCollections() {
+    setText('coll-stat', 'fetching…');
+    try {
+      const r = await fetch(COLL_URL);
+      if (!r.ok) throw new Error(`HTTP ${r.status} ${r.statusText}`);
+      const geo = await r.json();
+      const m = new Map();
+      for (const feat of (geo.features || [])) {
+        const id = feat.properties && feat.properties.index;
+        if (!id) continue;
+        m.set(id, feat.properties);
+      }
+      collections = m;
+      const sel = $('coll-sel');
+      sel.innerHTML = '<option value="OFF">OFF</option>' +
+        GROUP_KEYS.map(k => `<option value="${k}">${k}</option>`).join('');
+      setText('coll-stat', `${m.size.toLocaleString()} cells loaded`);
+    } catch (err) {
+      console.error('Collections load failed:', err, 'URL:', COLL_URL);
+      setText('coll-stat', `failed: ${err.message || err}`, 'warn');
+      $('coll-sel').innerHTML = '<option value="OFF">OFF (load failed)</option>';
+    }
+  }
+  function rebuildGroupColors(groupKey) {
+    groupColors.clear();
+    if (groupKey === 'OFF' || !collections) return;
+    const unique = new Set();
+    for (const p of collections.values()) {
+      if (p[groupKey] != null) unique.add(p[groupKey]);
+    }
+    const arr = Array.from(unique).sort();
+    arr.forEach((v, i) => groupColors.set(v, CATEGORY_COLORS[i % CATEGORY_COLORS.length]));
+  }
+  $('coll-sel').addEventListener('change', (e) => {
+    activeGroup = e.target.value;
+    rebuildGroupColors(activeGroup);
+    setText('coll-stat',
+      activeGroup === 'OFF'
+        ? `${(collections?.size ?? 0).toLocaleString()} cells loaded`
+        : `${groupColors.size} groups · ${(collections?.size ?? 0).toLocaleString()} cells`);
+    clearCells();
+    updateHexGrid();
+  });
+  loadCollections();
+
+  // ============ quality controls (#mesh + tile cache) ============
+  const sSSE = $('sse-slider');
+  function syncSSE() {
+    sseValue = +sSSE.value;
+    setText('sse-val', sseValue.toFixed(2));
+    globe.maximumScreenSpaceError = sseValue;
+  }
+  function cycleCache() {
+    const i = CACHE_PRESETS.indexOf(cacheSize);
+    cacheSize = CACHE_PRESETS[(i + 1) % CACHE_PRESETS.length];
+    globe.tileCacheSize = cacheSize;
+    $('cache-btn').textContent = cacheSize;
+  }
+  sSSE.addEventListener('input', syncSSE);
+  $('cache-btn').addEventListener('click', cycleCache);
+  // Initialize Cesium with the current settings
+  globe.maximumScreenSpaceError = sseValue;
+  globe.tileCacheSize = cacheSize;
+
+  // ============ service registry / LAYERS (#modular WMS / WMTS / XYZ / GeoJSON) ============
+  // Layers are described declaratively in services.json at the repo root.
+  // Each entry: { id, name, type, url, ... type-specific fields, alpha, minAlt, maxAlt, default }
+  // Types supported: 'geojson' | 'xyz' | 'wms' | 'wmts'
+  const SERVICES_URL = 'services.json';
+  // Fallback registry if services.json fails to load — at least coastlines stay available
+  const FALLBACK_SERVICES = { services: [{
+    id: 'coast', name: 'COAST', type: 'geojson',
+    url: 'https://raw.githubusercontent.com/martynafford/natural-earth-geojson/master/50m/physical/ne_50m_coastline.json',
+    style: { stroke: '#00ffff', width: 1.5, alpha: 0.85 },
+    default: true,
+  }]};
+
+  async function loadServices() {
+    let data;
+    try {
+      const r = await fetch(SERVICES_URL);
+      if (!r.ok) throw new Error(`HTTP ${r.status} ${r.statusText}`);
+      data = await r.json();
+    } catch (err) {
+      console.warn('services.json load failed, using fallback registry:', err, 'URL:', SERVICES_URL);
+      const msg = $('layer-msg');
+      if (msg) msg.textContent = `services.json: ${err.message || err} — using fallback`;
+      data = FALLBACK_SERVICES;
+    }
+    for (const svc of (data.services || [])) {
+      layers.set(svc.id, {
+        service: svc,
+        instance: null,                                       // lazy-instantiated on first show
+        wantedOn: !!svc.default,
+        inRange: true,
+        alpha: (svc.alpha != null ? svc.alpha : (svc.style && svc.style.alpha != null ? svc.style.alpha : 0.85)),
+      });
+    }
+    buildLayerRows();
+    // Eagerly load defaults so they're visible without user interaction
+    for (const [id, info] of layers) {
+      if (info.wantedOn) { await ensureLayerLoaded(id); }
+    }
+    updateLayerVisibility();
+  }
+
+  async function ensureLayerLoaded(id) {
+    const info = layers.get(id);
+    if (!info || info.instance) return info && info.instance;
+    const svc = info.service;
+    try {
+      if (svc.type === 'geojson') {
+        const stroke = Cesium.Color.fromCssColorString((svc.style && svc.style.stroke) || '#00ffff');
+        const ds = await Cesium.GeoJsonDataSource.load(svc.url, {
+          stroke: stroke.withAlpha(info.alpha),
+          strokeWidth: (svc.style && svc.style.width) || 1.5,
+          fill: Cesium.Color.TRANSPARENT,
+          clampToGround: true,
+        });
+        // Override each polyline material so we can mutate alpha later without re-loading
+        for (const e of ds.entities.values) {
+          if (e.polyline) {
+            e.polyline.material = new Cesium.ColorMaterialProperty(stroke.withAlpha(info.alpha));
+            e.polyline.width = (svc.style && svc.style.width) || 1.5;
+          }
+        }
+        ds.show = false;
+        viewer.dataSources.add(ds);
+        info.instance = ds;
+      } else if (svc.type === 'wms') {
+        const provider = new Cesium.WebMapServiceImageryProvider({
+          url: svc.url,
+          layers: svc.layers,
+          parameters: svc.parameters || {},
+        });
+        const layer = viewer.imageryLayers.addImageryProvider(provider);
+        layer.alpha = info.alpha;
+        if (svc.saturation != null) layer.saturation = svc.saturation;
+        if (svc.contrast != null)   layer.contrast = svc.contrast;
+        if (svc.brightness != null) layer.brightness = svc.brightness;
+        if (svc.hue != null)        layer.hue = svc.hue;
+        layer.show = false;
+        info.instance = layer;
+      } else if (svc.type === 'wmts') {
+        const provider = new Cesium.WebMapTileServiceImageryProvider({
+          url: svc.url,
+          layer: svc.layer,
+          style: svc.style2 || svc.styleName || 'default',
+          tileMatrixSetID: svc.tileMatrixSetID,
+          format: svc.format || 'image/png',
+        });
+        const layer = viewer.imageryLayers.addImageryProvider(provider);
+        layer.alpha = info.alpha;
+        if (svc.saturation != null) layer.saturation = svc.saturation;
+        if (svc.contrast != null)   layer.contrast = svc.contrast;
+        if (svc.brightness != null) layer.brightness = svc.brightness;
+        layer.show = false;
+        info.instance = layer;
+      } else if (svc.type === 'xyz') {
+        const opts = { url: svc.url, maximumLevel: svc.maxLevel || 19 };
+        if (svc.subdomains) opts.subdomains = svc.subdomains;
+        const provider = new Cesium.UrlTemplateImageryProvider(opts);
+        const layer = viewer.imageryLayers.addImageryProvider(provider);
+        layer.alpha = info.alpha;
+        if (svc.saturation != null) layer.saturation = svc.saturation;
+        if (svc.contrast != null)   layer.contrast = svc.contrast;
+        if (svc.brightness != null) layer.brightness = svc.brightness;
+        layer.show = false;
+        info.instance = layer;
+      } else {
+        throw new Error(`Unknown service type: ${svc.type}`);
+      }
+      return info.instance;
+    } catch (err) {
+      console.error(`Failed to load layer ${id}:`, err);
+      const row = document.querySelector(`.layer-row[data-id="${id}"]`);
+      if (row) row.classList.add('err');
+      const btn = document.getElementById(`lyr-${id}-btn`);
+      if (btn) btn.textContent = 'ERR';
+      return null;
+    }
+  }
+
+  function buildLayerRows() {
+    const container = $('layer-rows');
+    container.innerHTML = '';
+    if (layers.size === 0) {
+      container.innerHTML = '<div class="layer-msg">no services configured</div>';
+      return;
+    }
+    for (const [id, info] of layers) {
+      const row = document.createElement('div');
+      row.className = 'layer-row';
+      row.dataset.id = id;
+      row.innerHTML = `
+        <span class="layer-name">${info.service.name}</span>
+        <button class="btn btn-layer ${info.wantedOn ? '' : 'off'}" id="lyr-${id}-btn" type="button">${info.wantedOn ? 'ON' : 'OFF'}</button>
+        <input type="range" class="slider" id="lyr-${id}-alpha" min="0" max="100" step="5" value="${Math.round(info.alpha * 100)}">
+        <span class="slider-val" id="lyr-${id}-val">${Math.round(info.alpha * 100)}%</span>
+      `;
+      container.appendChild(row);
+
+      document.getElementById(`lyr-${id}-btn`).addEventListener('click', () => toggleLayer(id));
+      document.getElementById(`lyr-${id}-alpha`).addEventListener('input', (e) => setLayerAlpha(id, +e.target.value / 100));
+    }
+  }
+
+  async function toggleLayer(id) {
+    const info = layers.get(id);
+    if (!info) return;
+    info.wantedOn = !info.wantedOn;
+    const btn = document.getElementById(`lyr-${id}-btn`);
+    if (info.wantedOn && !info.instance) {
+      if (btn) btn.textContent = '…';
+      await ensureLayerLoaded(id);
+    }
+    updateLayerVisibility();
+  }
+
+  function setLayerAlpha(id, a) {
+    const info = layers.get(id);
+    if (!info) return;
+    info.alpha = a;
+    const val = document.getElementById(`lyr-${id}-val`);
+    if (val) val.textContent = `${Math.round(a * 100)}%`;
+    if (!info.instance) return;
+    if (info.service.type === 'geojson') {
+      const baseColor = Cesium.Color.fromCssColorString((info.service.style && info.service.style.stroke) || '#00ffff');
+      const newCol = baseColor.withAlpha(a);
+      for (const e of info.instance.entities.values) {
+        if (e.polyline) e.polyline.material = new Cesium.ColorMaterialProperty(newCol);
+      }
+    } else {
+      info.instance.alpha = a;
+    }
+  }
+
+  function updateLayerVisibility() {
+    const alt = viewer.camera.positionCartographic.height;
+    for (const [id, info] of layers) {
+      const svc = info.service;
+      const minOk = svc.minAlt == null || alt >= svc.minAlt;
+      const maxOk = svc.maxAlt == null || alt <= svc.maxAlt;
+      info.inRange = minOk && maxOk;
+      if (info.instance) info.instance.show = info.wantedOn && info.inRange;
+      const btn = document.getElementById(`lyr-${id}-btn`);
+      const row = document.querySelector(`.layer-row[data-id="${id}"]`);
+      if (btn) {
+        if (info.wantedOn && !info.inRange) {
+          btn.textContent = 'OOR';
+          btn.classList.remove('off');
+        } else {
+          btn.textContent = info.wantedOn ? 'ON' : 'OFF';
+          btn.classList.toggle('off', !info.wantedOn);
+        }
+      }
+      if (row) row.classList.toggle('oor', info.wantedOn && !info.inRange);
+    }
+  }
+
+  // Hook altitude-based gating onto existing camera-moveEnd update
+  viewer.camera.moveEnd.addEventListener(updateLayerVisibility);
+
+  loadServices();
+
+  // ============ deck collapsible sections ============
+  const SEC_KEYS = ['toggles', 'terrain', 'layers', 'ramp', 'environment', 'collections', 'quality'];
+  // First-load defaults — open the two sections people touch most, close the rest
+  const SEC_DEFAULTS = {
+    toggles: true, terrain: true,
+    layers: false, ramp: false, environment: false, collections: false, quality: false,
+  };
+  const SEC_STORAGE = 'hologrid-deck-v1';
+
+  function loadSecState() {
+    try {
+      const raw = localStorage.getItem(SEC_STORAGE);
+      if (!raw) return { ...SEC_DEFAULTS };
+      const parsed = JSON.parse(raw);
+      // Merge so new sections added later get sensible defaults rather than undefined
+      return { ...SEC_DEFAULTS, ...parsed };
+    } catch (_) { return { ...SEC_DEFAULTS }; }
+  }
+  function saveSecState(state) {
+    try { localStorage.setItem(SEC_STORAGE, JSON.stringify(state)); } catch (_) {}
+  }
+  let secState = loadSecState();
+
+  function applySecState() {
+    for (const key of SEC_KEYS) {
+      const wrap = document.querySelector(`[data-sec-wrap="${key}"]`);
+      if (!wrap) continue;
+      const open = !!secState[key];
+      wrap.classList.toggle('collapsed', !open);
+      const glyph = wrap.querySelector('.sec-glyph');
+      if (glyph) glyph.textContent = open ? '−' : '+';
+      const head = wrap.querySelector('.sec-head');
+      if (head) head.setAttribute('aria-expanded', String(open));
+    }
+    updateAllSummaries();
+  }
+  function toggleSec(key) {
+    secState[key] = !secState[key];
+    saveSecState(secState);
+    applySecState();
+    if (secState[key]) {
+      // Auto-scroll so the just-expanded section's content is visible
+      setTimeout(() => {
+        const head = document.querySelector(`[data-sec="${key}"]`);
+        head?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      }, 140);
+    }
+  }
+  SEC_KEYS.forEach(key => {
+    const head = document.querySelector(`[data-sec="${key}"]`);
+    if (!head) return;
+    head.addEventListener('click', () => toggleSec(key));
+    head.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleSec(key); }
+    });
+  });
+  $('expand-all').addEventListener('click', () => {
+    SEC_KEYS.forEach(k => secState[k] = true);
+    saveSecState(secState); applySecState();
+  });
+  $('collapse-all').addEventListener('click', () => {
+    SEC_KEYS.forEach(k => secState[k] = false);
+    saveSecState(secState); applySecState();
+  });
+
+  // Build a one-line state summary per section, shown only when the section is collapsed.
+  // Polled at 8 Hz — cheap, no need to thread updates through every sync function.
+  function updateAllSummaries() {
+    const hh = Math.floor(hourOfDay);
+    const mm = Math.round((hourOfDay - hh) * 60);
+    const timeStr = `${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')}`;
+    const sums = {
+      toggles: `${materialMode} · ${viewMode} · ${h3On ? 'H3' : '─'} · ${shadeOn ? 'SHADE' : '─'}`,
+      terrain: `${contourSp}m · ${exagg.toFixed(1)}× · ${cutoffOn ? 'CUT ' + cutoffH + 'm' : 'CUT─'}`,
+      layers: layers.size === 0
+        ? 'loading…'
+        : (() => {
+            const a = Array.from(layers.values()).filter(l => l.wantedOn && l.inRange).length;
+            return `${a}/${layers.size} ACTIVE`;
+          })(),
+      ramp: `${rampPalette} · ${gammaOn ? 'GAMMA ' + gammaVal.toFixed(2) : 'LINEAR'} · ${rampMin}/${rampMax}m`,
+      environment: `${dayLabel(dayOfYear)} ${timeStr} · ${hudHue}°`,
+      collections: activeGroup === 'OFF'
+        ? (collections ? `OFF · ${collections.size.toLocaleString()}` : 'loading…')
+        : `${activeGroup} · ${groupColors.size}grp`,
+      quality: `SSE ${sseValue.toFixed(2)} · ${cacheSize}t`,
+    };
+    for (const [key, txt] of Object.entries(sums)) {
+      const el = document.getElementById(`sum-${key}`);
+      if (el && el.textContent !== txt) el.textContent = txt;
+    }
+  }
+  applySecState();
+  setInterval(updateAllSummaries, 125);
+
+  // ============ attitude indicator + per-frame telemetry ============
+  function fmtDeg(d) { const s = d >= 0 ? '' : '-'; return `${s}${Math.abs(d).toFixed(4)}°`; }
+  function fmtMeters(m) { return m >= 1000 ? `${(m / 1000).toFixed(1)} km` : `${m.toFixed(0)} m`; }
+
+  scene.preRender.addEventListener(() => {
+    const c = viewer.camera.positionCartographic;
+    setText('lat', fmtDeg(Cesium.Math.toDegrees(c.latitude)));
+    setText('lon', fmtDeg(Cesium.Math.toDegrees(c.longitude)));
+    setText('alt', fmtMeters(c.height));
+
+    const pitch = viewer.camera.pitch;
+    const roll = viewer.camera.roll;
+    const ball = $('attBall');
+    if (ball) {
+      const ty = -Math.sin(pitch) * 35;
+      const rd = Cesium.Math.toDegrees(roll);
+      ball.setAttribute('transform', `translate(0 ${ty}) rotate(${rd})`);
+    }
+    const lbl = $('att-label');
+    if (lbl) {
+      const pDeg = Cesium.Math.toDegrees(pitch);
+      const hDeg = ((Cesium.Math.toDegrees(viewer.camera.heading) % 360) + 360) % 360;
+      lbl.textContent = `P ${pDeg.toFixed(0)}° · H ${hDeg.toFixed(0)}°`;
+    }
+    // Reflect camera pitch back into the slider (unless the user is dragging it themselves)
+    if (pitchSlider && document.activeElement !== pitchSlider) {
+      const pDeg = Cesium.Math.toDegrees(pitch);
+      const v = Math.max(-90, Math.min(0, Math.round(pDeg)));
+      if (+pitchSlider.value !== v) pitchSlider.value = v;
+    }
+  });
+
+  // ============ first paint ============
+  applyHoloStyle();
+
+  terrain.readyEvent.addEventListener((provider) => {
+    console.log('Terrain ready:', provider);
+    applyHoloStyle();
+    clearCells();
+    updateHexGrid();
+    setText('status', 'LOCK');
+    if (provider && provider.errorEvent && provider.errorEvent.addEventListener) {
+      provider.errorEvent.addEventListener((err) => console.warn('Terrain tile error:', err));
+    }
+  });
+
+  await updateHexGrid();
+  setText('status', 'LOCK');
+
+  const boot = $('boot');
+  boot.classList.add('gone');
+  setTimeout(() => boot.remove(), 900);
+
+})().catch(err => {
+  console.error(err);
+  const boot = document.getElementById('boot');
+  if (boot) {
+    boot.innerHTML =
+      '<div style="text-align:center;max-width:80%;line-height:1.6">' +
+        '<div style="font-size:14px;letter-spacing:0.3em;margin-bottom:14px">INIT FAILED</div>' +
+        '<div style="font-family:\'IBM Plex Mono\',monospace;font-size:11px;letter-spacing:0.05em;color:#ffb74d;text-shadow:0 0 6px rgba(255,183,77,0.5);word-break:break-word">' +
+          (err && err.message ? err.message : String(err)) +
+        '</div>' +
+      '</div>';
+    boot.style.color = '#ffb74d';
+  }
+});
+</script>
+</body>
+</html>
