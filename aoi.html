@@ -222,7 +222,7 @@
       <option value="ESRI">Satellite &middot; Esri</option>
       <option value="BING">Satellite &middot; Bing</option>
       <option value="S2">Copernicus &middot; Sentinel-2</option>
-      <option value="LANDSAT">Landsat &middot; NASA GIBS</option>
+      <option value="LANDSAT">Landsat 8 &middot; LandsatLook</option>
     </select>
     <div class="slabel" style="margin-top:7px;"><span>OVERLAY OPACITY</span><span id="lbl-imgop">100%</span></div>
     <input type="range" id="sl-imgop" min="0" max="100" step="5" value="100">
@@ -437,7 +437,7 @@
       else if(mode==='ESRI'){ prov=new C.UrlTemplateImageryProvider({ url:'https://services.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', maximumLevel:19, credit:'Esri World Imagery' }); }
       else if(mode==='BING'){ prov=await C.createWorldImageryAsync(); }
       else if(mode==='S2'){ prov=new C.UrlTemplateImageryProvider({ url:'https://tiles.maps.eox.at/wmts/1.0.0/s2cloudless-2020_3857/default/g/{z}/{y}/{x}.jpg', maximumLevel:16, credit:'Sentinel-2 cloudless 2020 by EOX (Copernicus)' }); }
-      else if(mode==='LANDSAT'){ prov=new C.WebMapTileServiceImageryProvider({ url:'https://gibs.earthdata.nasa.gov/wmts/epsg4326/best/wmts.cgi', layer:'Landsat_WELD_CorrectedReflectance_TrueColor_Global', style:'', format:'image/jpeg', tileMatrixSetID:'31.25m', tilingScheme:new C.GeographicTilingScheme(), tileWidth:512, tileHeight:512, maximumLevel:11, dimensions:{ Time:'2012-01-01' }, credit:'NASA GIBS / Landsat WELD (annual ~30m)' }); }
+      else if(mode==='LANDSAT'){ prov=new C.UrlTemplateImageryProvider({ url:'https://realearth.ssec.wisc.edu/tiles/lsat8-llook-fc/{z}/{x}/{y}.png', maximumLevel:16, credit:'Landsat 8 LandsatLook \u00b7 SSEC RealEarth' }); }
       if(prov){ imgLayer=viewer.imageryLayers.addImageryProvider(prov); imgLayer.alpha=state.imgOpacity; }
     }catch(e){ console.warn('imagery failed:',mode,e); }
   }
