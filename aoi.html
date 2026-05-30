@@ -163,11 +163,11 @@
     <div class="seg" id="seg-res"><button data-res="6">r6</button><button data-res="7" class="on">r7</button><button data-res="8">r8</button></div>
     <div class="seg" id="seg-k" style="margin-top:4px;"><button data-k="1" class="on">k1</button><button data-k="2">k2</button><button data-k="3">k3</button></div>
 
-    <h3>MATERIAL [M]</h3>
-    <div class="seg" id="seg-mat">
-      <button data-mat="NONE">NONE</button><button data-mat="CONTOUR" class="on">CTR</button>
-      <button data-mat="RAMP">RAMP</button><button data-mat="SLOPE">SLOPE</button>
+    <h3>SURFACE FILL [M]</h3>
+    <div class="seg" id="seg-fill">
+      <button data-fill="NONE">NONE</button><button data-fill="RAMP" class="on">RAMP</button><button data-fill="SLOPE">SLOPE</button>
     </div>
+    <div class="toggle-row" style="margin-top:8px;"><span>CONTOUR LINES [C]</span><div class="sw on" id="sw-contours"></div></div>
 
     <div id="ramp-ctrls" style="display:none;">
       <div class="row" style="margin-top:8px;"><label>PAL</label><button class="full" id="btn-pal" style="margin:0;">SHARP</button></div>
@@ -268,7 +268,7 @@
 
   const state = {
     lat:5.934983, lon:-74.819608, res:7, k:1,
-    mat:'CONTOUR', pal:'SHARP', rampMin:-500, rampMax:7000, autoRamp:true, localMin:null, localMax:null,
+    fill:'RAMP', contours:true, pal:'SHARP', rampMin:-500, rampMax:7000, autoRamp:true, localMin:null, localMax:null,
     contour:50, exag:1.0, sse:0.3, majorEvery:5, minorWidth:1.0, majorWidth:2.0, colorElev:true,
     day:172, hour:12, light:true, shadow:false,
     clip:true, imagery:'NONE', imgOpacity:0.7, orbit:true, h3:true, prism:true,
@@ -311,6 +311,9 @@
   if(scene.postProcessStages && scene.postProcessStages.fxaa) scene.postProcessStages.fxaa.enabled = true;
   viewer.clock.shouldAnimate = false;
   viewer.screenSpaceEventHandler.removeInputAction(C.ScreenSpaceEventType.LEFT_DOUBLE_CLICK);
+  // render at native device resolution (fixes soft/blurry imagery on HiDPI displays)
+  viewer.useBrowserRecommendedResolution = false;
+  viewer.resolutionScale = Math.min(window.devicePixelRatio || 1, 2);
 
   // ── terrain ─────────────────────────────────────────────────
   let cellEnts = [], hexEnts = [], prismEnts = [];
@@ -349,59 +352,58 @@
     grad.addColorStop(0.65,'#ffd24a'); grad.addColorStop(1,'#ff5a4d');
     g.fillStyle=grad; g.fillRect(0,0,256,1); return cv;
   }
-  // custom material: antialiased major/minor contours, optionally coloured by elevation ramp
-  const CONTOUR_GLSL = `
+  // unified surface material: ramp/slope fill + antialiased major/minor contours (overlayable)
+  const SURFACE_GLSL = `
     czm_material czm_getMaterial(czm_materialInput materialInput){
       czm_material material = czm_getDefaultMaterial(materialInput);
       float h = materialInput.height;
-      float dH = max(fwidth(h), 0.001);
-      float minorS = max(spacing, 0.001);
-      float majorS = minorS * max(majorEvery, 1.0);
-      float dm = mod(h, minorS); dm = min(dm, minorS - dm);
-      float dM = mod(h, majorS); dM = min(dM, majorS - dM);
-      float aMinor = (1.0 - smoothstep(0.0, dH * minorWidth, dm)) * minorAlpha;
-      float aMajor = (1.0 - smoothstep(0.0, dH * majorWidth, dM));
-      float lineA = clamp(max(aMinor, aMajor), 0.0, 1.0);
       float t = clamp((h - minHeight) / max(maxHeight - minHeight, 1.0), 0.0, 1.0);
-      vec4 rc = texture(rampImage, vec2(t, 0.5));
-      vec3 lc = mix(lineColor.rgb, rc.rgb, colorByElev);
-      vec3 col = mix(rc.rgb, lc, lineA);
+      vec4 rampC = texture(rampImage, vec2(t, 0.5));
+      float sl = clamp(materialInput.slope / czm_piOverTwo, 0.0, 1.0);
+      vec4 slopeC = texture(slopeImage, vec2(sl, 0.5));
+      vec3 fillColor = vec3(0.0); float fillA = 0.0;
+      if(fillMode > 1.5){ fillColor = slopeC.rgb; fillA = 1.0; }
+      else if(fillMode > 0.5){ fillColor = rampC.rgb; fillA = 1.0; }
+      float lineA = 0.0; vec3 lineCol = lineColor.rgb;
+      if(contoursOn > 0.5){
+        float dH = max(fwidth(h), 0.001);
+        float minorS = max(spacing, 0.001);
+        float majorS = minorS * max(majorEvery, 1.0);
+        float dm = mod(h, minorS); dm = min(dm, minorS - dm);
+        float dM = mod(h, majorS); dM = min(dM, majorS - dM);
+        float aMinor = (1.0 - smoothstep(0.0, dH * minorWidth, dm)) * minorAlpha;
+        float aMajor = (1.0 - smoothstep(0.0, dH * majorWidth, dM));
+        lineA = clamp(max(aMinor, aMajor), 0.0, 1.0);
+        lineCol = mix(lineColor.rgb, rampC.rgb, colorByElev);
+      }
+      vec3 col = mix(fillColor, lineCol, lineA);
       material.diffuse = czm_gammaCorrect(col);
-      material.alpha = max(lineA, fillAlpha);
+      material.alpha = max(fillA, lineA);
       return material;
     }`;
-  function contourMaterial(fillAlpha){
-    return new C.Material({ fabric:{ type:'PangeaContour',
+  function surfaceMaterial(){
+    return new C.Material({ fabric:{ type:'PangeaSurface',
       uniforms:{
-        rampImage: rampCanvas(),
-        spacing: state.contour,
-        majorEvery: state.majorEvery,
-        minorWidth: state.minorWidth,
-        majorWidth: state.majorWidth,
-        minorAlpha: 0.55,
-        minHeight: state.rampMin*state.exag,
-        maxHeight: state.rampMax*state.exag,
+        rampImage: rampCanvas(), slopeImage: slopeCanvas(),
+        fillMode: state.fill==='SLOPE'?2.0:(state.fill==='RAMP'?1.0:0.0),
+        contoursOn: state.contours?1.0:0.0,
+        spacing: state.contour, majorEvery: state.majorEvery,
+        minorWidth: state.minorWidth, majorWidth: state.majorWidth, minorAlpha: 0.55,
+        minHeight: state.rampMin*state.exag, maxHeight: state.rampMax*state.exag,
         lineColor: C.Color.fromCssColorString('#00e5ff'),
         colorByElev: state.colorElev?1.0:0.0,
-        fillAlpha: fillAlpha||0.0,
       },
-      source: CONTOUR_GLSL }});
+      source: SURFACE_GLSL }});
   }
   function applyMaterial(){
-    $('ramp-ctrls').style.display = (state.mat==='RAMP'||state.mat==='CONTOUR') ? 'block':'none';
-    $('contour-ctrls').style.display = (state.mat==='CONTOUR') ? 'block':'none';
-    if(state.mat==='NONE'){ globe.material=undefined; }
-    else if(state.mat==='CONTOUR'){ globe.material=contourMaterial(0.0); }
-    else if(state.mat==='RAMP'){
-      globe.material=C.Material.fromType('ElevationRamp',{image:rampCanvas(),
-        minimumHeight:state.rampMin*state.exag, maximumHeight:state.rampMax*state.exag});
-    } else if(state.mat==='SLOPE'){
-      globe.material=C.Material.fromType('SlopeRamp',{image:slopeCanvas()});
-    }
+    $('ramp-ctrls').style.display = (state.fill==='RAMP'||state.contours) ? 'block':'none';
+    $('contour-ctrls').style.display = state.contours ? 'block':'none';
+    if(state.fill==='NONE' && !state.contours){ globe.material=undefined; return; }
+    globe.material = surfaceMaterial();
   }
   function applyExag(){
     try{ scene.verticalExaggeration=state.exag; }catch(e){ try{ globe.terrainExaggeration=state.exag; }catch(_){} }
-    if(state.mat==='RAMP'||state.mat==='CONTOUR') applyMaterial();
+    applyMaterial();
   }
 
   function applyAutoClass(){ $('ramp-ctrls').classList.toggle('auto',state.autoRamp); }
@@ -414,7 +416,7 @@
     state.rampMax=Math.ceil(state.localMax+pad);
     if(state.rampMax-state.rampMin<40) state.rampMax=state.rampMin+40;
     updateWindowUI();
-    if(state.mat==='RAMP'||state.mat==='CONTOUR') applyMaterial();
+    applyMaterial();
   }
 
   // ── imagery overlay (OSM / Bing / Sentinel-2 / Landsat) ─────
@@ -428,7 +430,7 @@
       else if(mode==='ESRI'){ prov=new C.UrlTemplateImageryProvider({ url:'https://services.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', maximumLevel:19, credit:'Esri World Imagery' }); }
       else if(mode==='BING'){ prov=await C.createWorldImageryAsync(); }
       else if(mode==='S2'){ prov=new C.UrlTemplateImageryProvider({ url:'https://tiles.maps.eox.at/wmts/1.0.0/s2cloudless-2020_3857/default/g/{z}/{y}/{x}.jpg', maximumLevel:16, credit:'Sentinel-2 cloudless 2020 by EOX (Copernicus)' }); }
-      else if(mode==='LANDSAT'){ prov=new C.UrlTemplateImageryProvider({ url:'https://gibs.earthdata.nasa.gov/wmts/epsg4326/best/Landsat_WELD_CorrectedReflectance_TrueColor_Global/default/2012-01-01/31.25m/{z}/{y}/{x}.jpg', tilingScheme:new C.GeographicTilingScheme(), maximumLevel:12, tileWidth:512, tileHeight:512, credit:'NASA GIBS / Landsat WELD' }); }
+      else if(mode==='LANDSAT'){ prov=new C.WebMapTileServiceImageryProvider({ url:'https://gibs.earthdata.nasa.gov/wmts/epsg4326/best/Landsat_WELD_CorrectedReflectance_TrueColor_Global/default/2012-01-01/250m/{TileMatrix}/{TileRow}/{TileCol}.jpg', layer:'Landsat_WELD_CorrectedReflectance_TrueColor_Global', style:'default', format:'image/jpeg', tileMatrixSetID:'250m', tilingScheme:new C.GeographicTilingScheme(), tileWidth:512, tileHeight:512, maximumLevel:7, credit:'NASA GIBS / Landsat WELD (annual ~30m mosaic, coarse)' }); }
       if(prov){ imgLayer=viewer.imageryLayers.addImageryProvider(prov); imgLayer.alpha=state.imgOpacity; }
     }catch(e){ console.warn('imagery failed:',mode,e); }
   }
@@ -688,12 +690,12 @@
     [...$(seg).children].forEach(x=>x.classList.remove('on')); b.classList.add('on'); fn(b.dataset[key]);});
   segPick('seg-res','res',v=>{state.res=+v; buildAOI(state.lat,state.lon);});
   segPick('seg-k','k',v=>{state.k=+v; buildAOI(state.lat,state.lon);});
-  segPick('seg-mat','mat',v=>{state.mat=v; applyMaterial();});
+  segPick('seg-fill','fill',v=>{state.fill=v; applyMaterial();});
 
-  $('btn-pal').onclick=()=>{ state.pal=PALS[(PALS.indexOf(state.pal)+1)%PALS.length]; $('btn-pal').textContent=state.pal; if(state.mat==='RAMP'||state.mat==='CONTOUR')applyMaterial(); };
-  $('sl-min').oninput=e=>{ let v=+e.target.value; if(v>state.rampMax-GAP){ v=state.rampMax-GAP; flashWindow(); } state.rampMin=v; updateWindowUI(); if(state.mat==='RAMP'||state.mat==='CONTOUR')applyMaterial(); };
-  $('sl-max').oninput=e=>{ let v=+e.target.value; if(v<state.rampMin+GAP){ v=state.rampMin+GAP; flashWindow(); } state.rampMax=v; updateWindowUI(); if(state.mat==='RAMP'||state.mat==='CONTOUR')applyMaterial(); };
-  $('sl-contour').oninput=e=>{ state.contour=+e.target.value; $('lbl-contour').textContent=state.contour+' m'; if(state.mat==='CONTOUR')applyMaterial(); };
+  $('btn-pal').onclick=()=>{ state.pal=PALS[(PALS.indexOf(state.pal)+1)%PALS.length]; $('btn-pal').textContent=state.pal; applyMaterial(); };
+  $('sl-min').oninput=e=>{ let v=+e.target.value; if(v>state.rampMax-GAP){ v=state.rampMax-GAP; flashWindow(); } state.rampMin=v; updateWindowUI(); applyMaterial(); };
+  $('sl-max').oninput=e=>{ let v=+e.target.value; if(v<state.rampMin+GAP){ v=state.rampMin+GAP; flashWindow(); } state.rampMax=v; updateWindowUI(); applyMaterial(); };
+  $('sl-contour').oninput=e=>{ state.contour=+e.target.value; $('lbl-contour').textContent=state.contour+' m'; applyMaterial(); };
   $('sl-exag').oninput=e=>{ state.exag=+e.target.value; $('lbl-exag').textContent=state.exag.toFixed(1)+'\u00d7'; applyExag(); if(state.prism&&state.cellHeights.length) renderPrisms(); };
   $('sl-sse').oninput=e=>{ state.sse=+e.target.value; $('lbl-sse').textContent=state.sse.toFixed(2); globe.maximumScreenSpaceError=state.sse; };
   globe.maximumScreenSpaceError=state.sse;
@@ -705,23 +707,26 @@
   toggle('sw-light',on=>{ state.light=on; globe.enableLighting=on; if(on)syncSun(); });
   toggle('sw-shadow',on=>{ state.shadow=on; viewer.shadows=on; viewer.terrainShadows=on?C.ShadowMode.ENABLED:C.ShadowMode.DISABLED; });
   toggle('sw-clip',on=>{ state.clip=on; on?applyIsolation():clearIsolation(); });
+  toggle('sw-contours',on=>{ state.contours=on; applyMaterial(); });
   $('sel-img').onchange=e=>setImagery(e.target.value);
   $('sl-imgop').oninput=e=>{ state.imgOpacity=+e.target.value/100; $('lbl-imgop').textContent=e.target.value+'%'; if(imgLayer)imgLayer.alpha=state.imgOpacity; };
   toggle('sw-orbit',on=>{ state.orbit=on; if(on) lockOrbit(); else cam.lookAtTransform(C.Matrix4.IDENTITY); });
   toggle('sw-h3',on=>{ state.h3=on; hexEnts.forEach(e=>{e.polyline.show=on;}); });
   toggle('sw-prism',on=>{ state.prism=on; buildAOI(state.lat,state.lon); });
 
-  $('sl-major').oninput=e=>{ state.majorEvery=+e.target.value; $('lbl-major').textContent=state.majorEvery+'\u00d7'; if(state.mat==='CONTOUR')applyMaterial(); };
-  $('sl-minw').oninput=e=>{ state.minorWidth=+e.target.value; $('lbl-minw').textContent=state.minorWidth.toFixed(1)+' px'; if(state.mat==='CONTOUR')applyMaterial(); };
-  $('sl-majw').oninput=e=>{ state.majorWidth=+e.target.value; $('lbl-majw').textContent=state.majorWidth.toFixed(1)+' px'; if(state.mat==='CONTOUR')applyMaterial(); };
-  toggle('sw-colorelev',on=>{ state.colorElev=on; if(state.mat==='CONTOUR')applyMaterial(); });
-  toggle('sw-autoramp',on=>{ state.autoRamp=on; applyAutoClass(); if(on) fitRamp(); else if(state.mat==='RAMP'||state.mat==='CONTOUR') applyMaterial(); });
+  $('sl-major').oninput=e=>{ state.majorEvery=+e.target.value; $('lbl-major').textContent=state.majorEvery+'\u00d7'; applyMaterial(); };
+  $('sl-minw').oninput=e=>{ state.minorWidth=+e.target.value; $('lbl-minw').textContent=state.minorWidth.toFixed(1)+' px'; applyMaterial(); };
+  $('sl-majw').oninput=e=>{ state.majorWidth=+e.target.value; $('lbl-majw').textContent=state.majorWidth.toFixed(1)+' px'; applyMaterial(); };
+  toggle('sw-colorelev',on=>{ state.colorElev=on; applyMaterial(); });
+  toggle('sw-autoramp',on=>{ state.autoRamp=on; applyAutoClass(); if(on) fitRamp(); else applyMaterial(); });
 
   document.addEventListener('keydown',e=>{
-    if(e.target.tagName==='INPUT') return;
-    if(e.key==='m'||e.key==='M'){ const order=['NONE','CONTOUR','RAMP','SLOPE'];
-      state.mat=order[(order.indexOf(state.mat)+1)%order.length];
-      [...$('seg-mat').children].forEach(b=>b.classList.toggle('on',b.dataset.mat===state.mat)); applyMaterial(); }
+    if(e.target.tagName==='INPUT'||e.target.tagName==='SELECT') return;
+    if(e.key==='m'||e.key==='M'){ const order=['NONE','RAMP','SLOPE'];
+      state.fill=order[(order.indexOf(state.fill)+1)%order.length];
+      [...$('seg-fill').children].forEach(b=>b.classList.toggle('on',b.dataset.fill===state.fill)); applyMaterial(); }
+    if(e.key==='c'||e.key==='C'){ state.contours=!state.contours;
+      $('sw-contours').classList.toggle('on',state.contours); applyMaterial(); }
   });
 
   // ── boot ────────────────────────────────────────────────────
