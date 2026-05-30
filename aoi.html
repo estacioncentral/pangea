@@ -59,6 +59,9 @@
   input[type=text]{flex:1;background:rgba(0,229,255,0.06);border:1px solid var(--line);color:#cdfaff;
     font-family:inherit;font-size:11px;padding:5px 6px;outline:none;min-width:0;}
   input[type=text]:focus{border-color:var(--cyan);box-shadow:0 0 10px rgba(0,229,255,0.3);}
+  select{width:100%;background:rgba(0,229,255,0.06);border:1px solid var(--line);color:#cdfaff;font-family:inherit;font-size:11px;padding:6px;outline:none;cursor:pointer;}
+  select:focus{border-color:var(--cyan);box-shadow:0 0 10px rgba(0,229,255,0.3);}
+  option{background:#001018;color:#cdfaff;}
   button{background:rgba(0,229,255,0.10);border:1px solid var(--cyan-dim);color:var(--cyan);
     font-family:inherit;font-size:9.5px;letter-spacing:0.16em;padding:6px 9px;cursor:pointer;transition:0.15s;text-transform:uppercase;}
   button:hover{background:rgba(0,229,255,0.22);box-shadow:0 0 12px rgba(0,229,255,0.35);}
@@ -181,8 +184,15 @@
       </div>
     </div>
     <div id="contour-ctrls">
-      <div class="slabel" style="margin-top:8px;"><span>CONTOUR SPACING</span><span id="lbl-contour">50 m</span></div>
+      <div class="slabel" style="margin-top:8px;"><span>MINOR SPACING</span><span id="lbl-contour">50 m</span></div>
       <input type="range" id="sl-contour" min="10" max="500" step="10" value="50">
+      <div class="slabel" style="margin-top:6px;"><span>MAJOR EVERY</span><span id="lbl-major">5&times;</span></div>
+      <input type="range" id="sl-major" min="2" max="10" step="1" value="5">
+      <div class="slabel" style="margin-top:6px;"><span>MINOR WIDTH</span><span id="lbl-minw">1.0 px</span></div>
+      <input type="range" id="sl-minw" min="0.5" max="4" step="0.5" value="1">
+      <div class="slabel" style="margin-top:6px;"><span>MAJOR WIDTH</span><span id="lbl-majw">2.0 px</span></div>
+      <input type="range" id="sl-majw" min="1" max="8" step="0.5" value="2">
+      <div class="toggle-row" style="margin-top:7px;"><span>COLOR BY ELEVATION</span><div class="sw on" id="sw-colorelev"></div></div>
     </div>
 
     <h3>TERRAIN</h3>
@@ -204,7 +214,13 @@
     <div class="hint">Masks the globe to the ring + locks the camera. This is what keeps it cheap &mdash; only this patch ever streams.</div>
 
     <h3>IMAGERY OVERLAY</h3>
-    <div class="seg" id="seg-img"><button data-img="NONE" class="on">NONE</button><button data-img="OSM">OSM</button><button data-img="SAT">SAT</button></div>
+    <select id="sel-img">
+      <option value="NONE" selected>NONE</option>
+      <option value="OSM">OpenStreetMap</option>
+      <option value="SAT">Satellite &middot; Bing</option>
+      <option value="S2">Sentinel-2 cloudless</option>
+      <option value="LANDSAT">Landsat &middot; NASA GIBS</option>
+    </select>
     <div class="slabel" style="margin-top:7px;"><span>OVERLAY OPACITY</span><span id="lbl-imgop">70%</span></div>
     <input type="range" id="sl-imgop" min="0" max="100" step="5" value="70">
     <div class="toggle-row" style="margin-top:8px;"><span>H3 WIREFRAME</span><div class="sw on" id="sw-h3"></div></div>
@@ -251,7 +267,7 @@
   const state = {
     lat:5.934983, lon:-74.819608, res:7, k:1,
     mat:'CONTOUR', pal:'SHARP', rampMin:-500, rampMax:7000, autoRamp:true, localMin:null, localMax:null,
-    contour:50, exag:1.0, sse:0.3,
+    contour:50, exag:1.0, sse:0.3, majorEvery:5, minorWidth:1.0, majorWidth:2.0, colorElev:true,
     day:172, hour:12, light:true, shadow:false,
     clip:true, imagery:'NONE', imgOpacity:0.7, orbit:true, h3:true,
     cells:[], center:null, bounds:null, _bs:null, localMean:null,
@@ -289,6 +305,8 @@
   globe.depthTestAgainstTerrain = true;
   globe.tileCacheSize = 1000;
   scene.fog.enabled = false; scene.highDynamicRange = false;
+  try{ scene.msaaSamples = 4; }catch(e){}
+  if(scene.postProcessStages && scene.postProcessStages.fxaa) scene.postProcessStages.fxaa.enabled = true;
   viewer.clock.shouldAnimate = false;
   viewer.screenSpaceEventHandler.removeInputAction(C.ScreenSpaceEventType.LEFT_DOUBLE_CLICK);
 
@@ -329,14 +347,50 @@
     grad.addColorStop(0.65,'#ffd24a'); grad.addColorStop(1,'#ff5a4d');
     g.fillStyle=grad; g.fillRect(0,0,256,1); return cv;
   }
+  // custom material: antialiased major/minor contours, optionally coloured by elevation ramp
+  const CONTOUR_GLSL = `
+    czm_material czm_getMaterial(czm_materialInput materialInput){
+      czm_material material = czm_getDefaultMaterial(materialInput);
+      float h = materialInput.height;
+      float dH = max(fwidth(h), 0.001);
+      float minorS = max(spacing, 0.001);
+      float majorS = minorS * max(majorEvery, 1.0);
+      float dm = mod(h, minorS); dm = min(dm, minorS - dm);
+      float dM = mod(h, majorS); dM = min(dM, majorS - dM);
+      float aMinor = (1.0 - smoothstep(0.0, dH * minorWidth, dm)) * minorAlpha;
+      float aMajor = (1.0 - smoothstep(0.0, dH * majorWidth, dM));
+      float lineA = clamp(max(aMinor, aMajor), 0.0, 1.0);
+      float t = clamp((h - minHeight) / max(maxHeight - minHeight, 1.0), 0.0, 1.0);
+      vec4 rc = texture(rampImage, vec2(t, 0.5));
+      vec3 lc = mix(lineColor.rgb, rc.rgb, colorByElev);
+      vec3 col = mix(rc.rgb, lc, lineA);
+      material.diffuse = czm_gammaCorrect(col);
+      material.alpha = max(lineA, fillAlpha);
+      return material;
+    }`;
+  function contourMaterial(fillAlpha){
+    return new C.Material({ fabric:{ type:'PangeaContour',
+      uniforms:{
+        rampImage: rampCanvas(),
+        spacing: state.contour,
+        majorEvery: state.majorEvery,
+        minorWidth: state.minorWidth,
+        majorWidth: state.majorWidth,
+        minorAlpha: 0.55,
+        minHeight: state.rampMin*state.exag,
+        maxHeight: state.rampMax*state.exag,
+        lineColor: C.Color.fromCssColorString('#00e5ff'),
+        colorByElev: state.colorElev?1.0:0.0,
+        fillAlpha: fillAlpha||0.0,
+      },
+      source: CONTOUR_GLSL }});
+  }
   function applyMaterial(){
-    $('ramp-ctrls').style.display = state.mat==='RAMP' ? 'block':'none';
-    $('contour-ctrls').style.display = state.mat==='CONTOUR' ? 'block':'none';
+    $('ramp-ctrls').style.display = (state.mat==='RAMP'||state.mat==='CONTOUR') ? 'block':'none';
+    $('contour-ctrls').style.display = (state.mat==='CONTOUR') ? 'block':'none';
     if(state.mat==='NONE'){ globe.material=undefined; }
-    else if(state.mat==='CONTOUR'){
-      globe.material=C.Material.fromType('ElevationContour',{spacing:state.contour,
-        color:C.Color.fromCssColorString('#00e5ff').withAlpha(0.85),width:1.4});
-    } else if(state.mat==='RAMP'){
+    else if(state.mat==='CONTOUR'){ globe.material=contourMaterial(0.0); }
+    else if(state.mat==='RAMP'){
       globe.material=C.Material.fromType('ElevationRamp',{image:rampCanvas(),
         minimumHeight:state.rampMin*state.exag, maximumHeight:state.rampMax*state.exag});
     } else if(state.mat==='SLOPE'){
@@ -345,7 +399,7 @@
   }
   function applyExag(){
     try{ scene.verticalExaggeration=state.exag; }catch(e){ try{ globe.terrainExaggeration=state.exag; }catch(_){} }
-    if(state.mat==='RAMP') applyMaterial();
+    if(state.mat==='RAMP'||state.mat==='CONTOUR') applyMaterial();
   }
 
   function applyAutoClass(){ $('ramp-ctrls').classList.toggle('auto',state.autoRamp); }
@@ -358,19 +412,28 @@
     state.rampMax=Math.ceil(state.localMax+pad);
     if(state.rampMax-state.rampMin<40) state.rampMax=state.rampMin+40;
     updateWindowUI();
-    if(state.mat==='RAMP') applyMaterial();
+    if(state.mat==='RAMP'||state.mat==='CONTOUR') applyMaterial();
   }
 
-  // ── imagery overlay (OSM / satellite) ───────────────────────
+  // ── imagery overlay (OSM / Bing / Sentinel-2 / Landsat) ─────
   let imgLayer=null;
   async function setImagery(mode){
     state.imagery=mode;
     if(imgLayer){ viewer.imageryLayers.remove(imgLayer,true); imgLayer=null; }
     try{
-      if(mode==='OSM'){ imgLayer=viewer.imageryLayers.addImageryProvider(new C.OpenStreetMapImageryProvider({url:'https://tile.openstreetmap.org/'})); }
-      else if(mode==='SAT'){ const p=await C.createWorldImageryAsync(); imgLayer=viewer.imageryLayers.addImageryProvider(p); }
-      if(imgLayer) imgLayer.alpha=state.imgOpacity;
-    }catch(e){ console.warn('imagery failed',e); }
+      let prov=null;
+      if(mode==='OSM'){ prov=new C.OpenStreetMapImageryProvider({url:'https://tile.openstreetmap.org/'}); }
+      else if(mode==='SAT'){ prov=await C.createWorldImageryAsync(); }
+      else if(mode==='S2'){ prov=await C.IonImageryProvider.fromAssetId(3954); }   // Sentinel-2 cloudless
+      else if(mode==='LANDSAT'){                                                   // NASA GIBS Landsat WELD (best-effort)
+        prov=new C.WebMapTileServiceImageryProvider({
+          url:'https://gibs.earthdata.nasa.gov/wmts/epsg4326/best/Landsat_WELD_CorrectedReflectance_TrueColor_Global/default/2012-01-01/31.25m/{TileMatrix}/{TileRow}/{TileCol}.jpg',
+          layer:'Landsat_WELD_CorrectedReflectance_TrueColor_Global', style:'default',
+          format:'image/jpeg', tileMatrixSetID:'31.25m', maximumLevel:11,
+          tilingScheme:new C.GeographicTilingScheme(), credit:'NASA GIBS / Landsat WELD' });
+      }
+      if(prov){ imgLayer=viewer.imageryLayers.addImageryProvider(prov); imgLayer.alpha=state.imgOpacity; }
+    }catch(e){ console.warn('imagery failed:',mode,e); }
   }
 
   // ── orbit lock: gimbal around the centre cell ───────────────
@@ -593,9 +656,9 @@
   segPick('seg-k','k',v=>{state.k=+v; buildAOI(state.lat,state.lon);});
   segPick('seg-mat','mat',v=>{state.mat=v; applyMaterial();});
 
-  $('btn-pal').onclick=()=>{ state.pal=PALS[(PALS.indexOf(state.pal)+1)%PALS.length]; $('btn-pal').textContent=state.pal; if(state.mat==='RAMP')applyMaterial(); };
-  $('sl-min').oninput=e=>{ let v=+e.target.value; if(v>state.rampMax-GAP){ v=state.rampMax-GAP; flashWindow(); } state.rampMin=v; updateWindowUI(); if(state.mat==='RAMP')applyMaterial(); };
-  $('sl-max').oninput=e=>{ let v=+e.target.value; if(v<state.rampMin+GAP){ v=state.rampMin+GAP; flashWindow(); } state.rampMax=v; updateWindowUI(); if(state.mat==='RAMP')applyMaterial(); };
+  $('btn-pal').onclick=()=>{ state.pal=PALS[(PALS.indexOf(state.pal)+1)%PALS.length]; $('btn-pal').textContent=state.pal; if(state.mat==='RAMP'||state.mat==='CONTOUR')applyMaterial(); };
+  $('sl-min').oninput=e=>{ let v=+e.target.value; if(v>state.rampMax-GAP){ v=state.rampMax-GAP; flashWindow(); } state.rampMin=v; updateWindowUI(); if(state.mat==='RAMP'||state.mat==='CONTOUR')applyMaterial(); };
+  $('sl-max').oninput=e=>{ let v=+e.target.value; if(v<state.rampMin+GAP){ v=state.rampMin+GAP; flashWindow(); } state.rampMax=v; updateWindowUI(); if(state.mat==='RAMP'||state.mat==='CONTOUR')applyMaterial(); };
   $('sl-contour').oninput=e=>{ state.contour=+e.target.value; $('lbl-contour').textContent=state.contour+' m'; if(state.mat==='CONTOUR')applyMaterial(); };
   $('sl-exag').oninput=e=>{ state.exag=+e.target.value; $('lbl-exag').textContent=state.exag.toFixed(1)+'\u00d7'; applyExag(); };
   $('sl-sse').oninput=e=>{ state.sse=+e.target.value; $('lbl-sse').textContent=state.sse.toFixed(2); globe.maximumScreenSpaceError=state.sse; };
@@ -608,11 +671,16 @@
   toggle('sw-light',on=>{ state.light=on; globe.enableLighting=on; if(on)syncSun(); });
   toggle('sw-shadow',on=>{ state.shadow=on; viewer.shadows=on; viewer.terrainShadows=on?C.ShadowMode.ENABLED:C.ShadowMode.DISABLED; });
   toggle('sw-clip',on=>{ state.clip=on; on?applyIsolation():clearIsolation(); });
-  segPick('seg-img','img',v=>setImagery(v));
+  $('sel-img').onchange=e=>setImagery(e.target.value);
   $('sl-imgop').oninput=e=>{ state.imgOpacity=+e.target.value/100; $('lbl-imgop').textContent=e.target.value+'%'; if(imgLayer)imgLayer.alpha=state.imgOpacity; };
   toggle('sw-orbit',on=>{ state.orbit=on; if(on) lockOrbit(); else cam.lookAtTransform(C.Matrix4.IDENTITY); });
   toggle('sw-h3',on=>{ state.h3=on; hexEnts.forEach(e=>{e.polyline.show=on;}); });
-  toggle('sw-autoramp',on=>{ state.autoRamp=on; applyAutoClass(); if(on) fitRamp(); else if(state.mat==='RAMP') applyMaterial(); });
+
+  $('sl-major').oninput=e=>{ state.majorEvery=+e.target.value; $('lbl-major').textContent=state.majorEvery+'\u00d7'; if(state.mat==='CONTOUR')applyMaterial(); };
+  $('sl-minw').oninput=e=>{ state.minorWidth=+e.target.value; $('lbl-minw').textContent=state.minorWidth.toFixed(1)+' px'; if(state.mat==='CONTOUR')applyMaterial(); };
+  $('sl-majw').oninput=e=>{ state.majorWidth=+e.target.value; $('lbl-majw').textContent=state.majorWidth.toFixed(1)+' px'; if(state.mat==='CONTOUR')applyMaterial(); };
+  toggle('sw-colorelev',on=>{ state.colorElev=on; if(state.mat==='CONTOUR')applyMaterial(); });
+  toggle('sw-autoramp',on=>{ state.autoRamp=on; applyAutoClass(); if(on) fitRamp(); else if(state.mat==='RAMP'||state.mat==='CONTOUR') applyMaterial(); });
 
   document.addEventListener('keydown',e=>{
     if(e.target.tagName==='INPUT') return;
