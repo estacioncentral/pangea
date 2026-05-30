@@ -1,0 +1,588 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PANGEA · LOCAL CELL — enriched AOI instrument</title>
+
+<link href="https://cesium.com/downloads/cesiumjs/releases/1.121/Build/Cesium/Widgets/widgets.css" rel="stylesheet">
+<script src="https://cesium.com/downloads/cesiumjs/releases/1.121/Build/Cesium/Cesium.js"></script>
+<script src="https://unpkg.com/h3-js@4"></script>
+
+<style>
+  :root {
+    --cyan:#00e5ff; --cyan-dim:rgba(0,229,255,0.55); --cyan-faint:rgba(0,229,255,0.14);
+    --amber:#ffaa00; --bg-deep:#000308; --panel:rgba(0,13,26,0.84);
+    --line:rgba(0,229,255,0.26); --warn:#ff5a4d; --ok:#45f0a0;
+  }
+  * { margin:0; padding:0; box-sizing:border-box; }
+  html, body { height:100%; background:var(--bg-deep); color:var(--cyan);
+    font-family:'IBM Plex Mono','Courier New',monospace; overflow:hidden; letter-spacing:0.03em; }
+  #cesiumMain { position:absolute; inset:0; }
+  .cesium-viewer-bottom,.cesium-widget-credits,.cesium-credit-logoContainer,
+  .cesium-credit-textContainer,.cesium-viewer-animationContainer,.cesium-viewer-timelineContainer,
+  .cesium-viewer-toolbar,.cesium-viewer-fullscreenContainer{display:none !important;}
+
+  #fx { position:absolute; inset:0; pointer-events:none; z-index:5;
+    background:radial-gradient(ellipse at center,transparent 52%,rgba(0,3,8,0.6) 100%),
+      repeating-linear-gradient(0deg,rgba(0,229,255,0.022) 0 1px,transparent 1px 3px);
+    mix-blend-mode:screen; }
+
+  .panel { position:absolute; z-index:10; background:var(--panel); border:1px solid var(--line);
+    backdrop-filter:blur(6px); box-shadow:0 0 24px rgba(0,229,255,0.09),inset 0 0 30px rgba(0,229,255,0.035); }
+  .panel::before{content:'';position:absolute;top:-1px;left:-1px;width:9px;height:9px;border-top:1px solid var(--cyan);border-left:1px solid var(--cyan);}
+  .panel::after{content:'';position:absolute;bottom:-1px;right:-1px;width:9px;height:9px;border-bottom:1px solid var(--cyan);border-right:1px solid var(--cyan);}
+
+  /* HUD */
+  #hud{ top:16px; left:16px; padding:13px 16px; min-width:236px; }
+  #hud .sys{font-size:8.5px;letter-spacing:0.32em;opacity:0.5;}
+  #hud .title{font-size:19px;letter-spacing:0.15em;margin-top:2px;text-shadow:0 0 16px rgba(0,229,255,0.55);}
+  #hud .sub{font-size:8.5px;letter-spacing:0.24em;opacity:0.55;margin-top:2px;}
+  #hud .grid{margin-top:10px;display:grid;grid-template-columns:auto 1fr;gap:2px 12px;font-size:10.5px;}
+  #hud .k{opacity:0.45;letter-spacing:0.12em;} #hud .v{text-align:right;color:#cdfaff;}
+  #hud .v.amber{color:var(--amber);}
+  #att-wrap{display:flex;align-items:center;gap:10px;margin-top:10px;}
+  #att{flex:0 0 54px;}
+  #att-lbl{font-size:9.5px;opacity:0.7;letter-spacing:0.14em;}
+  #status-row{display:flex;align-items:center;gap:7px;font-size:9.5px;letter-spacing:0.2em;margin-top:6px;}
+  #dot{width:7px;height:7px;border-radius:50%;background:var(--cyan);box-shadow:0 0 10px var(--cyan);animation:pulse 1.6s infinite;}
+  #dot.warn{background:var(--warn);box-shadow:0 0 10px var(--warn);} #dot.ok{background:var(--ok);box-shadow:0 0 10px var(--ok);}
+  @keyframes pulse{0%,100%{opacity:1}50%{opacity:0.3}}
+
+  /* control deck */
+  #deck{ top:16px; right:16px; width:268px; padding:12px 14px 14px; max-height:calc(100vh - 32px); overflow-y:auto; }
+  #deck::-webkit-scrollbar{width:5px;} #deck::-webkit-scrollbar-thumb{background:var(--cyan-dim);}
+  #deck h3{font-size:8.5px;letter-spacing:0.28em;opacity:0.5;margin:13px 0 6px;font-weight:400;}
+  #deck h3:first-child{margin-top:0;}
+  .row{display:flex;align-items:center;gap:7px;margin-bottom:7px;}
+  .row label{font-size:9.5px;letter-spacing:0.08em;opacity:0.7;flex:0 0 40px;}
+  input[type=text]{flex:1;background:rgba(0,229,255,0.06);border:1px solid var(--line);color:#cdfaff;
+    font-family:inherit;font-size:11px;padding:5px 6px;outline:none;min-width:0;}
+  input[type=text]:focus{border-color:var(--cyan);box-shadow:0 0 10px rgba(0,229,255,0.3);}
+  button{background:rgba(0,229,255,0.10);border:1px solid var(--cyan-dim);color:var(--cyan);
+    font-family:inherit;font-size:9.5px;letter-spacing:0.16em;padding:6px 9px;cursor:pointer;transition:0.15s;text-transform:uppercase;}
+  button:hover{background:rgba(0,229,255,0.22);box-shadow:0 0 12px rgba(0,229,255,0.35);}
+  button.full{width:100%;margin-top:2px;}
+  .seg{display:flex;gap:4px;} .seg button{flex:1;padding:6px 0;}
+  .seg button.on{background:var(--cyan);color:#001018;font-weight:700;}
+  input[type=range]{flex:1;accent-color:var(--cyan);background:transparent;height:14px;}
+  .slabel{display:flex;justify-content:space-between;font-size:9.5px;opacity:0.72;margin-bottom:2px;letter-spacing:0.08em;}
+  .slabel span:last-child{color:#cdfaff;opacity:1;}
+  .toggle-row{display:flex;justify-content:space-between;align-items:center;margin-bottom:7px;font-size:9.5px;letter-spacing:0.1em;opacity:0.86;}
+  .sw{width:32px;height:15px;border:1px solid var(--cyan-dim);border-radius:8px;position:relative;cursor:pointer;transition:0.15s;flex:0 0 32px;}
+  .sw::after{content:'';position:absolute;top:1px;left:1px;width:11px;height:11px;border-radius:50%;background:var(--cyan-dim);transition:0.15s;}
+  .sw.on{background:rgba(0,229,255,0.25);border-color:var(--cyan);}
+  .sw.on::after{left:17px;background:var(--cyan);box-shadow:0 0 8px var(--cyan);}
+  .hint{font-size:8.5px;opacity:0.4;letter-spacing:0.05em;line-height:1.5;margin-top:3px;}
+  #ramp-ctrls.auto .manual-ramp{opacity:0.34;pointer-events:none;}
+  .auto-note{font-size:8.5px;opacity:0.45;letter-spacing:0.05em;line-height:1.5;margin:5px 0 2px;}
+  .auto-note b{color:var(--amber);font-weight:400;}
+
+  /* analytics */
+  #analytics{ bottom:16px; left:16px; padding:12px 15px; width:248px; }
+  #analytics .h{font-size:8.5px;letter-spacing:0.28em;opacity:0.5;margin-bottom:8px;}
+  #analytics .ar{display:grid;grid-template-columns:auto 1fr;gap:3px 12px;font-size:10.5px;}
+  #analytics .ak{opacity:0.5;letter-spacing:0.1em;} #analytics .av{text-align:right;color:#cdfaff;}
+  #illum-bar{height:4px;background:rgba(0,229,255,0.12);margin-top:9px;position:relative;overflow:hidden;}
+  #illum-fill{position:absolute;inset:0 100% 0 0;background:linear-gradient(90deg,#0a3b66,#ffd24a);transition:right 0.4s;}
+  #analytics .note{font-size:8.5px;opacity:0.4;margin-top:7px;letter-spacing:0.06em;}
+
+  /* locator */
+  #locator{ bottom:16px; right:16px; width:230px; height:160px; padding:0; overflow:hidden; }
+  #locator iframe{width:100%;height:100%;border:0;filter:grayscale(0.3) brightness(0.85) contrast(1.05);}
+  #locator .cap{position:absolute;top:0;left:0;right:0;z-index:2;padding:4px 8px;font-size:7.5px;letter-spacing:0.22em;
+    background:linear-gradient(180deg,rgba(0,3,8,0.85),transparent);pointer-events:none;}
+
+  /* cell inspector tooltip */
+  #cellinfo{position:absolute;z-index:20;pointer-events:none;padding:7px 10px;background:rgba(0,13,26,0.92);
+    border:1px solid var(--cyan-dim);font-size:9.5px;letter-spacing:0.06em;line-height:1.6;display:none;
+    box-shadow:0 0 16px rgba(0,229,255,0.25);}
+  #cellinfo .ci-id{color:var(--amber);font-size:9px;}
+
+  /* boot */
+  #boot{position:absolute;inset:0;z-index:50;background:var(--bg-deep);display:flex;flex-direction:column;
+    align-items:center;justify-content:center;gap:14px;transition:opacity 0.7s;}
+  #boot.gone{opacity:0;pointer-events:none;}
+  #boot .ring{width:52px;height:52px;border:2px solid var(--cyan-faint);border-top-color:var(--cyan);border-radius:50%;animation:spin 0.9s linear infinite;}
+  @keyframes spin{to{transform:rotate(360deg);}}
+  #boot .bt{font-size:10.5px;letter-spacing:0.32em;opacity:0.7;}
+</style>
+</head>
+<body>
+  <div id="cesiumMain"></div>
+  <div id="fx"></div>
+
+  <!-- HUD -->
+  <div id="hud" class="panel">
+    <div class="sys">PANGEA SPATIAL INTELLIGENCE</div>
+    <div class="title">LOCAL CELL</div>
+    <div class="sub">H3 r<span id="hud-res">7</span> · CENTER + RING k<span id="hud-k">1</span></div>
+    <div class="grid">
+      <div class="k">LAT</div><div class="v" id="t-lat">—</div>
+      <div class="k">LON</div><div class="v" id="t-lon">—</div>
+      <div class="k">ALT</div><div class="v" id="t-alt">—</div>
+      <div class="k">CENTER</div><div class="v amber" id="t-cell">—</div>
+      <div class="k">CELLS</div><div class="v" id="t-count">—</div>
+      <div class="k">FOOTPRINT</div><div class="v" id="t-area">—</div>
+    </div>
+    <div id="att-wrap">
+      <svg id="att" viewBox="-30 -30 60 60">
+        <circle cx="0" cy="0" r="26" fill="none" stroke="rgba(0,229,255,0.25)" stroke-width="1"/>
+        <g id="att-horizon">
+          <rect x="-26" y="0" width="52" height="26" fill="rgba(0,229,255,0.06)"/>
+          <line x1="-26" y1="0" x2="26" y2="0" stroke="#00e5ff" stroke-width="1"/>
+        </g>
+        <path d="M-9 0 L-3 0 M3 0 L9 0 M0 -3 L0 3" stroke="#ffaa00" stroke-width="1.4" fill="none"/>
+      </svg>
+      <div><div id="att-lbl">P 0&deg; &middot; H 0&deg;</div>
+        <div id="status-row"><span id="dot"></span><span id="status">BOOT</span></div></div>
+    </div>
+  </div>
+
+  <!-- CONTROL DECK -->
+  <div id="deck" class="panel">
+    <h3>TARGET</h3>
+    <div class="row"><label>LAT</label><input type="text" id="in-lat" value="5.934983"></div>
+    <div class="row"><label>LON</label><input type="text" id="in-lon" value="-74.819608"></div>
+    <button class="full" id="btn-go">&#9656; LOCK COORDINATES</button>
+    <div class="hint">Or click empty terrain to retarget &middot; hover a cell to inspect.</div>
+
+    <h3>RESOLUTION / RING</h3>
+    <div class="seg" id="seg-res"><button data-res="6">r6</button><button data-res="7" class="on">r7</button><button data-res="8">r8</button></div>
+    <div class="seg" id="seg-k" style="margin-top:4px;"><button data-k="1" class="on">k1</button><button data-k="2">k2</button><button data-k="3">k3</button></div>
+
+    <h3>MATERIAL [M]</h3>
+    <div class="seg" id="seg-mat">
+      <button data-mat="NONE">NONE</button><button data-mat="CONTOUR" class="on">CTR</button>
+      <button data-mat="RAMP">RAMP</button><button data-mat="SLOPE">SLOPE</button>
+    </div>
+
+    <div id="ramp-ctrls" style="display:none;">
+      <div class="row" style="margin-top:8px;"><label>PAL</label><button class="full" id="btn-pal" style="margin:0;">SHARP</button></div>
+      <div class="toggle-row" style="margin-top:7px;"><span>AUTO-FIT TO RING</span><div class="sw on" id="sw-autoramp"></div></div>
+      <div class="auto-note" id="autofit-note">gradient stretched across this ring&rsquo;s <b id="fit-range">min&rarr;max</b></div>
+      <div class="manual-ramp">
+        <div class="slabel" style="margin-top:6px;"><span>ELEV MIN</span><span id="lbl-min">-500 m</span></div>
+        <input type="range" id="sl-min" min="-1000" max="3000" step="50" value="-500">
+        <div class="slabel" style="margin-top:6px;"><span>ELEV MAX</span><span id="lbl-max">7000 m</span></div>
+        <input type="range" id="sl-max" min="1000" max="9000" step="100" value="7000">
+      </div>
+    </div>
+    <div id="contour-ctrls">
+      <div class="slabel" style="margin-top:8px;"><span>CONTOUR SPACING</span><span id="lbl-contour">50 m</span></div>
+      <input type="range" id="sl-contour" min="10" max="500" step="10" value="50">
+    </div>
+
+    <h3>TERRAIN</h3>
+    <div class="slabel"><span>VERTICAL EXAGG.</span><span id="lbl-exag">1.0&times;</span></div>
+    <input type="range" id="sl-exag" min="1" max="5" step="0.1" value="1">
+    <div class="slabel" style="margin-top:6px;"><span>DETAIL (SSE)</span><span id="lbl-sse">0.30</span></div>
+    <input type="range" id="sl-sse" min="0.3" max="2" step="0.1" value="0.3">
+
+    <h3>SOLAR</h3>
+    <div class="slabel"><span>DAY OF YEAR</span><span id="lbl-day">172</span></div>
+    <input type="range" id="sl-day" min="0" max="365" step="1" value="172">
+    <div class="slabel" style="margin-top:6px;"><span>HOUR (LOCAL)</span><span id="lbl-hour">12:00</span></div>
+    <input type="range" id="sl-hour" min="0" max="24" step="0.25" value="12">
+    <div class="toggle-row" style="margin-top:7px;"><span>SUN SHADING</span><div class="sw on" id="sw-light"></div></div>
+    <div class="toggle-row"><span>CAST SHADOWS</span><div class="sw" id="sw-shadow"></div></div>
+
+    <h3>ISOLATION</h3>
+    <div class="toggle-row"><span>CLIP TO RING</span><div class="sw on" id="sw-clip"></div></div>
+    <div class="hint">Masks the globe to the ring + locks the camera. This is what keeps it cheap &mdash; only this patch ever streams.</div>
+
+    <h3>OVERLAY</h3>
+    <div class="toggle-row"><span>OPENSTREETMAP</span><div class="sw" id="sw-osm"></div></div>
+    <div class="toggle-row"><span>H3 WIREFRAME</span><div class="sw on" id="sw-h3"></div></div>
+  </div>
+
+  <!-- ANALYTICS -->
+  <div id="analytics" class="panel">
+    <div class="h">AOI ANALYTICS</div>
+    <div class="ar">
+      <div class="ak">ELEV MIN</div><div class="av" id="a-emin">&mdash;</div>
+      <div class="ak">ELEV MAX</div><div class="av" id="a-emax">&mdash;</div>
+      <div class="ak">ELEV MEAN</div><div class="av" id="a-emean">&mdash;</div>
+      <div class="ak">RELIEF</div><div class="av" id="a-relief">&mdash;</div>
+      <div class="ak">MEAN SLOPE</div><div class="av" id="a-slope">&mdash;</div>
+      <div class="ak">SUN ALT/AZ</div><div class="av" id="a-sun">&mdash;</div>
+      <div class="ak">ILLUMINATION</div><div class="av" id="a-illum">&mdash;</div>
+    </div>
+    <div id="illum-bar"><div id="illum-fill"></div></div>
+    <div class="note" id="a-note">sampling terrain&hellip;</div>
+  </div>
+
+  <!-- LOCATOR -->
+  <div id="locator" class="panel"><div class="cap">GLOBAL LOCATOR &middot; OSM</div><iframe id="loc-frame" loading="lazy" referrerpolicy="no-referrer"></iframe></div>
+
+  <!-- CELL TOOLTIP -->
+  <div id="cellinfo"></div>
+
+  <!-- BOOT -->
+  <div id="boot"><div class="ring"></div><div class="bt">INITIALISING SPATIAL CORE&hellip;</div></div>
+
+<script>
+(async function () {
+  const $ = id => document.getElementById(id);
+  const h3 = window.h3;
+  const C = Cesium;
+
+  // ion token (yours, from project history)
+  C.Ion.defaultAccessToken = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJqdGkiOiIxZDg4N2JhMy0yYjZmLTQyNWYtOWYxOS0wOTgzYzdiMTAyN2MiLCJpZCI6NDAwNDE5LCJpYXQiOjE3NzMwMDIxMzd9._lZyiTNSuapslmg-vfAwvD3pp0zKtXjW94l3hIpDq_8';
+
+  const state = {
+    lat:5.934983, lon:-74.819608, res:7, k:1,
+    mat:'CONTOUR', pal:'SHARP', rampMin:-500, rampMax:7000, autoRamp:true, localMin:null, localMax:null,
+    contour:50, exag:1.0, sse:0.3,
+    day:172, hour:12, light:true, shadow:false,
+    clip:true, osm:false, h3:true,
+    cells:[], center:null, bounds:null, _bs:null,
+  };
+  const PALS = ['SHARP','SOFT','MONO'];
+  const RES_AREA = {6:36.129, 7:5.161, 8:0.737};
+
+  const setStatus=(t,c)=>{ $('status').textContent=t; const d=$('dot'); d.className=''; if(c)d.classList.add(c); };
+
+  // ── viewer ──────────────────────────────────────────────────
+  const viewer = new C.Viewer('cesiumMain', {
+    baseLayer:false, baseLayerPicker:false, geocoder:false, homeButton:false,
+    sceneModePicker:false, navigationHelpButton:false, timeline:false, animation:false,
+    infoBox:false, selectionIndicator:false, skyBox:false, skyAtmosphere:false, shadows:false,
+  });
+  const scene = viewer.scene, globe = scene.globe, cam = viewer.camera;
+  scene.backgroundColor = C.Color.fromCssColorString('#000308');
+  globe.baseColor = C.Color.fromCssColorString('#021622');
+  globe.showGroundAtmosphere = false;
+  globe.depthTestAgainstTerrain = true;
+  globe.tileCacheSize = 1000;
+  scene.fog.enabled = false; scene.highDynamicRange = false;
+  viewer.clock.shouldAnimate = false;
+  viewer.screenSpaceEventHandler.removeInputAction(C.ScreenSpaceEventType.LEFT_DOUBLE_CLICK);
+
+  // ── terrain ─────────────────────────────────────────────────
+  let cellEnts = [], hexEnts = [];
+  async function loadTerrain() {
+    setStatus('TERRAIN…');
+    try {
+      const t = await C.createWorldTerrainAsync({ requestVertexNormals:true });
+      globe.terrainProvider = t; setStatus('LOCK','ok');
+    } catch(e) {
+      console.warn('terrain → ellipsoid', e);
+      globe.terrainProvider = new C.EllipsoidTerrainProvider(); setStatus('NO TERR','warn');
+    }
+    applyMaterial(); applyExag();
+  }
+
+  // ── ramp / slope canvases ───────────────────────────────────
+  function rampCanvas() {
+    const cv=document.createElement('canvas'); cv.width=256; cv.height=1; const g=cv.getContext('2d');
+    const grad=g.createLinearGradient(0,0,256,0);
+    const seaT=Math.max(0,Math.min(1,(0-state.rampMin)/(state.rampMax-state.rampMin)));
+    if(state.pal==='MONO'){ grad.addColorStop(0,'#012027'); grad.addColorStop(1,'#00e5ff'); }
+    else if(state.pal==='SOFT'){ grad.addColorStop(0,'#03303a'); grad.addColorStop(0.5,'#0aa6c0'); grad.addColorStop(1,'#dffaff'); }
+    else { // SHARP — independent blue below sea level
+      if(seaT>0.01){ grad.addColorStop(0,'#001a33'); grad.addColorStop(Math.max(0,seaT-0.002),'#0a5688'); grad.addColorStop(seaT,'#0e6ea8'); }
+      grad.addColorStop(Math.min(0.999,seaT+0.002),'#0a4a36');
+      grad.addColorStop(Math.min(1,seaT+(1-seaT)*0.45),'#19c39a');
+      grad.addColorStop(Math.min(1,seaT+(1-seaT)*0.72),'#ffd24a');
+      grad.addColorStop(1,'#ffffff');
+    }
+    g.fillStyle=grad; g.fillRect(0,0,256,1); return cv;
+  }
+  function slopeCanvas(){
+    const cv=document.createElement('canvas'); cv.width=256; cv.height=1; const g=cv.getContext('2d');
+    const grad=g.createLinearGradient(0,0,256,0);
+    grad.addColorStop(0,'#022a1e'); grad.addColorStop(0.35,'#19c39a');
+    grad.addColorStop(0.65,'#ffd24a'); grad.addColorStop(1,'#ff5a4d');
+    g.fillStyle=grad; g.fillRect(0,0,256,1); return cv;
+  }
+  function applyMaterial(){
+    $('ramp-ctrls').style.display = state.mat==='RAMP' ? 'block':'none';
+    $('contour-ctrls').style.display = state.mat==='CONTOUR' ? 'block':'none';
+    if(state.mat==='NONE'){ globe.material=undefined; }
+    else if(state.mat==='CONTOUR'){
+      globe.material=C.Material.fromType('ElevationContour',{spacing:state.contour,
+        color:C.Color.fromCssColorString('#00e5ff').withAlpha(0.85),width:1.4});
+    } else if(state.mat==='RAMP'){
+      globe.material=C.Material.fromType('ElevationRamp',{image:rampCanvas(),
+        minimumHeight:state.rampMin*state.exag, maximumHeight:state.rampMax*state.exag});
+    } else if(state.mat==='SLOPE'){
+      globe.material=C.Material.fromType('SlopeRamp',{image:slopeCanvas()});
+    }
+  }
+  function applyExag(){
+    try{ scene.verticalExaggeration=state.exag; }catch(e){ try{ globe.terrainExaggeration=state.exag; }catch(_){} }
+    if(state.mat==='RAMP') applyMaterial();
+  }
+
+  function applyAutoClass(){ $('ramp-ctrls').classList.toggle('auto',state.autoRamp); }
+  // stretch the ramp window across the ring's own elevation extent
+  function fitRamp(){
+    if(state.localMin==null) return;
+    const relief=Math.max(1,state.localMax-state.localMin);
+    const pad=Math.max(8,relief*0.03);
+    state.rampMin=Math.floor(state.localMin-pad);
+    state.rampMax=Math.ceil(state.localMax+pad);
+    if(state.rampMax-state.rampMin<40) state.rampMax=state.rampMin+40;
+    $('sl-min').value=state.rampMin; $('lbl-min').textContent=state.rampMin+' m';
+    $('sl-max').value=state.rampMax; $('lbl-max').textContent=state.rampMax+' m';
+    $('fit-range').textContent=`${state.rampMin}\u2192${state.rampMax} m`;
+    if(state.mat==='RAMP') applyMaterial();
+  }
+
+  // ── OSM overlay ─────────────────────────────────────────────
+  let osmLayer=null;
+  function setOSM(on){ state.osm=on;
+    if(on&&!osmLayer){ osmLayer=viewer.imageryLayers.addImageryProvider(new C.OpenStreetMapImageryProvider({url:'https://tile.openstreetmap.org/'})); osmLayer.alpha=0.7; }
+    else if(!on&&osmLayer){ viewer.imageryLayers.remove(osmLayer,true); osmLayer=null; }
+  }
+
+  // ── solar position (NOAA approx) → {alt,az} degrees ─────────
+  function solar(date, lat, lon){
+    const r=Math.PI/180, d=180/Math.PI;
+    const jd=date.getTime()/86400000+2440587.5, n=jd-2451545.0;
+    const L=(280.460+0.9856474*n)%360, g=((357.528+0.9856003*n)%360)*r;
+    const lam=(L+1.915*Math.sin(g)+0.020*Math.sin(2*g))*r;
+    const eps=(23.439-0.0000004*n)*r;
+    const decl=Math.asin(Math.sin(eps)*Math.sin(lam));
+    const gmst=(280.46061837+360.98564736629*n)%360;
+    const lmst=((gmst+lon)%360+360)%360;
+    const ra=((Math.atan2(Math.cos(eps)*Math.sin(lam),Math.cos(lam))*d)%360+360)%360;
+    let ha=((lmst-ra+540)%360)-180;
+    const haR=ha*r, latR=lat*r;
+    const alt=Math.asin(Math.sin(latR)*Math.sin(decl)+Math.cos(latR)*Math.cos(decl)*Math.cos(haR));
+    const az=Math.atan2(-Math.sin(haR),Math.tan(decl)*Math.cos(latR)-Math.sin(latR)*Math.cos(haR));
+    return { alt:alt*d, az:((az*d)+360)%360 };
+  }
+  function currentSunDate(){
+    const offset=Math.round(state.lon/15);                 // rough local→UTC
+    const base=new Date(Date.UTC(2025,0,1,0,0,0));
+    base.setUTCDate(base.getUTCDate()+state.day);
+    base.setUTCHours(state.hour - offset, (state.hour%1)*60, 0, 0);
+    return base;
+  }
+  function syncSun(){
+    const date=currentSunDate();
+    viewer.clock.currentTime=C.JulianDate.fromDate(date);
+    const hh=Math.floor(state.hour), mm=Math.round((state.hour-hh)*60);
+    $('lbl-hour').textContent=`${String(hh).padStart(2,'0')}:${String(mm).padStart(2,'0')}`;
+    $('lbl-day').textContent=state.day;
+    const s=solar(date,state.lat,state.lon);
+    $('a-sun').textContent=`${s.alt.toFixed(0)}\u00b0 / ${s.az.toFixed(0)}\u00b0`;
+    return s;
+  }
+
+  // ── AOI builder ─────────────────────────────────────────────
+  function clearCells(){ cellEnts.forEach(e=>viewer.entities.remove(e)); cellEnts=[]; hexEnts=[]; }
+
+  function buildAOI(lat,lon){
+    state.lat=lat; state.lon=lon; clearCells();
+    const center=h3.latLngToCell(lat,lon,state.res);
+    const cells=h3.gridDisk(center,state.k);
+    state.center=center; state.cells=cells;
+
+    const allPts=[]; let w=180,s=90,e=-180,nn=-90;
+    for(const cell of cells){
+      const isC=cell===center;
+      const b=h3.cellToBoundary(cell); const flat=[];
+      for(const pair of b){ const la=pair[0], ln=pair[1]; flat.push(ln,la); allPts.push(C.Cartesian3.fromDegrees(ln,la));
+        w=Math.min(w,ln); e=Math.max(e,ln); s=Math.min(s,la); nn=Math.max(nn,la); }
+      const line=viewer.entities.add({ _cellId:cell, _isC:isC,
+        polyline:{ positions:C.Cartesian3.fromDegreesArray(flat.concat(flat[0],flat[1])),
+          width:isC?3.5:2, clampToGround:true,
+          material:new C.PolylineGlowMaterialProperty({glowPower:0.25,
+            color:C.Color.fromCssColorString(isC?'#ffaa00':'#00e5ff')}),
+          show:state.h3 } });
+      const fill=viewer.entities.add({ _cellId:cell, _isC:isC, _pick:true,
+        polygon:{ hierarchy:C.Cartesian3.fromDegreesArray(flat),
+          material:C.Color.fromCssColorString(isC?'#ffaa00':'#00e5ff').withAlpha(isC?0.10:0.045),
+          classificationType:C.ClassificationType.TERRAIN } });
+      cellEnts.push(line,fill); hexEnts.push(line);
+    }
+    state.bounds={west:w,south:s,east:e,north:nn};
+
+    $('t-cell').textContent=center; $('t-count').textContent=cells.length;
+    $('t-area').textContent='\u2248 '+((RES_AREA[state.res]||0)*cells.length).toFixed(1)+' km\u00b2';
+    $('hud-res').textContent=state.res; $('hud-k').textContent=state.k;
+    updateLocator(lat,lon);
+
+    const bs=C.BoundingSphere.fromPoints(allPts);
+    state._bs=bs;
+
+    if(state.clip) applyIsolation(); else clearIsolation();
+
+    setStatus('FRAMING…');
+    cam.flyToBoundingSphere(bs,{ duration:2.2,
+      offset:new C.HeadingPitchRange(C.Math.toRadians(25),C.Math.toRadians(-38),Math.max(bs.radius*3.0,2200)),
+      complete:()=>setStatus(globe.terrainProvider instanceof C.EllipsoidTerrainProvider?'NO TERR':'LOCK',
+        globe.terrainProvider instanceof C.EllipsoidTerrainProvider?'warn':'ok') });
+
+    syncSun();
+    runAnalytics();        // enriched derivation
+  }
+
+  // ── isolation: limit-rect + clip-polygon + camera lock ──────
+  function applyIsolation(){
+    const b=state.bounds; if(!b) return;
+    const pad=0.0025;
+    globe.cartographicLimitRectangle=C.Rectangle.fromDegrees(b.west-pad,b.south-pad,b.east+pad,b.north+pad);
+    try{
+      const mp=h3.cellsToMultiPolygon(state.cells,true);   // GeoJSON [ [ [ [lng,lat]... ] ] ]
+      const ring=mp[0][0]; const flat=[];
+      for(const pair of ring){ flat.push(pair[0],pair[1]); }
+      globe.clippingPolygons=new C.ClippingPolygonCollection({
+        polygons:[new C.ClippingPolygon({positions:C.Cartesian3.fromDegreesArray(flat)})],
+        inverse:true });
+    }catch(err){ console.warn('clip poly failed (limit-rect still active):',err); }
+    if(state._bs) scene.screenSpaceCameraController.maximumZoomDistance=Math.max(state._bs.radius*8,8000);
+  }
+  function clearIsolation(){
+    globe.cartographicLimitRectangle=C.Rectangle.MAX_VALUE;
+    globe.clippingPolygons=undefined;
+    scene.screenSpaceCameraController.maximumZoomDistance=Infinity;
+  }
+
+  // ── enriched terrain + solar analytics ──────────────────────
+  let analyticsToken=0;
+  async function runAnalytics(){
+    const tok=++analyticsToken; const b=state.bounds; if(!b) return;
+    if(globe.terrainProvider instanceof C.EllipsoidTerrainProvider){
+      $('a-note').textContent='terrain offline — metrics unavailable'; return;
+    }
+    $('a-note').textContent='sampling terrain…';
+    const N=16, pts=[];
+    for(let i=0;i<N;i++){ const la=b.south+(b.north-b.south)*i/(N-1);
+      for(let j=0;j<N;j++){ const ln=b.west+(b.east-b.west)*j/(N-1);
+        pts.push(C.Cartographic.fromDegrees(ln,la)); } }
+    let sampled;
+    try{ sampled=await C.sampleTerrainMostDetailed(globe.terrainProvider,pts); }
+    catch(e){ $('a-note').textContent='sampling failed'; return; }
+    if(tok!==analyticsToken) return;                          // superseded
+
+    const H=sampled.map(p=>p.height||0);
+    let min=Infinity,max=-Infinity,sum=0;
+    for(const h of H){ if(h<min)min=h; if(h>max)max=h; sum+=h; }
+    const mean=sum/H.length, relief=max-min;
+    state.localMin=min; state.localMax=max;
+    if(state.autoRamp) fitRamp();
+    const midLat=(b.south+b.north)/2*Math.PI/180;
+    const dLat=(b.north-b.south)/(N-1)*111320;
+    const dLon=(b.east-b.west)/(N-1)*111320*Math.cos(midLat);
+    const at=(i,j)=>H[i*N+j];
+    const s=syncSun();
+    const sunAlt=s.alt*Math.PI/180, sunAz=s.az*Math.PI/180;
+    const sun=[Math.cos(sunAlt)*Math.sin(sunAz),Math.cos(sunAlt)*Math.cos(sunAz),Math.sin(sunAlt)];
+    let slopeSum=0, slopeN=0, illSum=0, illN=0;
+    for(let i=1;i<N-1;i++) for(let j=1;j<N-1;j++){
+      const dzdx=(at(i,j+1)-at(i,j-1))/(2*dLon);
+      const dzdy=(at(i+1,j)-at(i-1,j))/(2*dLat);
+      const slope=Math.atan(Math.hypot(dzdx,dzdy)); slopeSum+=slope; slopeN++;
+      const nlen=Math.hypot(dzdx,dzdy,1), nrm=[-dzdx/nlen,-dzdy/nlen,1/nlen];
+      const dot=nrm[0]*sun[0]+nrm[1]*sun[1]+nrm[2]*sun[2];
+      illSum+=(s.alt>0?Math.max(0,dot):0); illN++;
+    }
+    const meanSlope=slopeN?slopeSum/slopeN*180/Math.PI:0;
+    const illum=illN?illSum/illN:0;
+
+    $('a-emin').textContent=min.toFixed(0)+' m';
+    $('a-emax').textContent=max.toFixed(0)+' m';
+    $('a-emean').textContent=mean.toFixed(0)+' m';
+    $('a-relief').textContent=relief.toFixed(0)+' m';
+    $('a-slope').textContent=meanSlope.toFixed(1)+'\u00b0';
+    $('a-illum').textContent=(illum*100).toFixed(0)+'%';
+    $('illum-fill').style.right=(100-illum*100)+'%';
+    $('a-note').textContent=`${H.length} terrain samples \u00b7 sun ${s.alt>0?'up':'below horizon'}`;
+  }
+
+  // ── locator inset ───────────────────────────────────────────
+  function updateLocator(lat,lon){ const d=0.35;
+    const bbox=[lon-d,lat-d,lon+d,lat+d].join('%2C');
+    $('loc-frame').src=`https://www.openstreetmap.org/export/embed.html?bbox=${bbox}&layer=mapnik&marker=${lat}%2C${lon}`; }
+
+  // ── telemetry + attitude ────────────────────────────────────
+  const fmtDeg=d=>(d>=0?'':'-')+Math.abs(d).toFixed(5)+'\u00b0';
+  const fmtM=m=>m>=1000?(m/1000).toFixed(1)+' km':m.toFixed(0)+' m';
+  scene.preRender.addEventListener(()=>{
+    const c=cam.positionCartographic;
+    $('t-lat').textContent=fmtDeg(C.Math.toDegrees(c.latitude));
+    $('t-lon').textContent=fmtDeg(C.Math.toDegrees(c.longitude));
+    $('t-alt').textContent=fmtM(c.height);
+    const pitch=cam.pitch, roll=cam.roll;
+    $('att-horizon').setAttribute('transform',`translate(0 ${-Math.sin(pitch)*22}) rotate(${C.Math.toDegrees(roll)})`);
+    const hd=((C.Math.toDegrees(cam.heading)%360)+360)%360;
+    $('att-lbl').textContent=`P ${C.Math.toDegrees(pitch).toFixed(0)}\u00b0 \u00b7 H ${hd.toFixed(0)}\u00b0`;
+  });
+
+  // ── interaction: hover inspect, click retarget ──────────────
+  const hh=new C.ScreenSpaceEventHandler(scene.canvas);
+  const ci=$('cellinfo');
+  hh.setInputAction(m=>{
+    const picked=scene.pick(m.endPosition);
+    if(picked&&picked.id&&picked.id._cellId&&picked.id._pick){
+      const cell=picked.id._cellId; const ll=h3.cellToLatLng(cell); const la=ll[0], ln=ll[1];
+      ci.style.display='block'; ci.style.left=(m.endPosition.x+14)+'px'; ci.style.top=(m.endPosition.y+14)+'px';
+      ci.innerHTML=`<div class="ci-id">${cell}</div>${picked.id._isC?'CENTER':'RING'} \u00b7 r${state.res}<br>`
+        +`${la.toFixed(5)}, ${ln.toFixed(5)}<br>\u2248 ${(RES_AREA[state.res]||0).toFixed(2)} km\u00b2`;
+    } else ci.style.display='none';
+  },C.ScreenSpaceEventType.MOUSE_MOVE);
+  hh.setInputAction(click=>{
+    const cart=scene.pickPosition(click.position)||cam.pickEllipsoid(click.position,globe.ellipsoid);
+    if(!cart) return;
+    const carto=C.Cartographic.fromCartesian(cart);
+    const lat=C.Math.toDegrees(carto.latitude), lon=C.Math.toDegrees(carto.longitude);
+    $('in-lat').value=lat.toFixed(6); $('in-lon').value=lon.toFixed(6); buildAOI(lat,lon);
+  },C.ScreenSpaceEventType.LEFT_CLICK);
+
+  // ── controls ────────────────────────────────────────────────
+  $('btn-go').onclick=()=>{ const la=parseFloat($('in-lat').value),ln=parseFloat($('in-lon').value);
+    if(Number.isFinite(la)&&Number.isFinite(ln)) buildAOI(la,ln); };
+  ['in-lat','in-lon'].forEach(id=>$(id).addEventListener('keydown',e=>{if(e.key==='Enter')$('btn-go').click();}));
+
+  const segPick=(seg,key,fn)=>$(seg).addEventListener('click',e=>{const b=e.target.closest('button');if(!b)return;
+    [...$(seg).children].forEach(x=>x.classList.remove('on')); b.classList.add('on'); fn(b.dataset[key]);});
+  segPick('seg-res','res',v=>{state.res=+v; buildAOI(state.lat,state.lon);});
+  segPick('seg-k','k',v=>{state.k=+v; buildAOI(state.lat,state.lon);});
+  segPick('seg-mat','mat',v=>{state.mat=v; applyMaterial();});
+
+  $('btn-pal').onclick=()=>{ state.pal=PALS[(PALS.indexOf(state.pal)+1)%PALS.length]; $('btn-pal').textContent=state.pal; if(state.mat==='RAMP')applyMaterial(); };
+  $('sl-min').oninput=e=>{ state.rampMin=Math.min(+e.target.value,state.rampMax-100); $('lbl-min').textContent=state.rampMin+' m'; if(state.mat==='RAMP')applyMaterial(); };
+  $('sl-max').oninput=e=>{ state.rampMax=Math.max(+e.target.value,state.rampMin+100); $('lbl-max').textContent=state.rampMax+' m'; if(state.mat==='RAMP')applyMaterial(); };
+  $('sl-contour').oninput=e=>{ state.contour=+e.target.value; $('lbl-contour').textContent=state.contour+' m'; if(state.mat==='CONTOUR')applyMaterial(); };
+  $('sl-exag').oninput=e=>{ state.exag=+e.target.value; $('lbl-exag').textContent=state.exag.toFixed(1)+'\u00d7'; applyExag(); };
+  $('sl-sse').oninput=e=>{ state.sse=+e.target.value; $('lbl-sse').textContent=state.sse.toFixed(2); globe.maximumScreenSpaceError=state.sse; };
+  globe.maximumScreenSpaceError=state.sse;
+
+  $('sl-day').oninput=e=>{ state.day=+e.target.value; if(state.light)syncSun(); runAnalytics(); };
+  $('sl-hour').oninput=e=>{ state.hour=+e.target.value; if(state.light)syncSun(); runAnalytics(); };
+
+  const toggle=(sw,fn)=>$(sw).addEventListener('click',()=>{const on=!$(sw).classList.contains('on');$(sw).classList.toggle('on',on);fn(on);});
+  toggle('sw-light',on=>{ state.light=on; globe.enableLighting=on; if(on)syncSun(); });
+  toggle('sw-shadow',on=>{ state.shadow=on; viewer.shadows=on; viewer.terrainShadows=on?C.ShadowMode.ENABLED:C.ShadowMode.DISABLED; });
+  toggle('sw-clip',on=>{ state.clip=on; on?applyIsolation():clearIsolation(); });
+  toggle('sw-osm',on=>setOSM(on));
+  toggle('sw-h3',on=>{ state.h3=on; hexEnts.forEach(e=>{e.polyline.show=on;}); });
+  toggle('sw-autoramp',on=>{ state.autoRamp=on; applyAutoClass(); if(on) fitRamp(); else if(state.mat==='RAMP') applyMaterial(); });
+
+  document.addEventListener('keydown',e=>{
+    if(e.target.tagName==='INPUT') return;
+    if(e.key==='m'||e.key==='M'){ const order=['NONE','CONTOUR','RAMP','SLOPE'];
+      state.mat=order[(order.indexOf(state.mat)+1)%order.length];
+      [...$('seg-mat').children].forEach(b=>b.classList.toggle('on',b.dataset.mat===state.mat)); applyMaterial(); }
+  });
+
+  // ── boot ────────────────────────────────────────────────────
+  setStatus('READY');
+  applyAutoClass();
+  globe.enableLighting=state.light;
+  await loadTerrain();
+  buildAOI(state.lat,state.lon);
+  setTimeout(()=>{ const b=$('boot'); b.classList.add('gone'); setTimeout(()=>b.remove(),800); },1000);
+
+})().catch(err=>{ console.error(err);
+  const b=document.getElementById('boot');
+  if(b) b.innerHTML='<div style="text-align:center;max-width:80%;color:#ff5a4d;font-family:monospace;font-size:12px;letter-spacing:.06em;line-height:1.6">'
+    +'<div style="letter-spacing:.3em;margin-bottom:12px">INIT FAILED</div>'+(err&&err.message?err.message:String(err))+'</div>';
+});
+</script>
+</body>
+</html>
