@@ -1,0 +1,495 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PANGEA · LOCAL CELL — H3 r7 · center + ring</title>
+
+<link href="https://cesium.com/downloads/cesiumjs/releases/1.121/Build/Cesium/Widgets/widgets.css" rel="stylesheet">
+<script src="https://cesium.com/downloads/cesiumjs/releases/1.121/Build/Cesium/Cesium.js"></script>
+<script src="https://unpkg.com/h3-js@4"></script>
+
+<style>
+  :root {
+    --cyan:        #00e5ff;
+    --cyan-dim:    rgba(0,229,255,0.55);
+    --cyan-faint:  rgba(0,229,255,0.16);
+    --amber:       #ffaa00;
+    --amber-dim:   rgba(255,170,0,0.6);
+    --bg-deep:     #000308;
+    --panel:       rgba(0,14,28,0.82);
+    --panel-line:  rgba(0,229,255,0.28);
+    --warn:        #ff5a4d;
+    --ok:          #45f0a0;
+  }
+  * { margin:0; padding:0; box-sizing:border-box; }
+  html, body {
+    height:100%; background:var(--bg-deep); color:var(--cyan);
+    font-family:'IBM Plex Mono','Courier New',monospace;
+    overflow:hidden; letter-spacing:0.04em;
+  }
+  #cesiumMain { position:absolute; inset:0; }
+
+  /* strip cesium chrome */
+  .cesium-viewer-bottom, .cesium-widget-credits,
+  .cesium-credit-logoContainer, .cesium-credit-textContainer,
+  .cesium-viewer-animationContainer, .cesium-viewer-timelineContainer,
+  .cesium-viewer-toolbar, .cesium-viewer-fullscreenContainer { display:none !important; }
+
+  /* ── scanline / vignette atmosphere ─────────────────────────── */
+  #fx {
+    position:absolute; inset:0; pointer-events:none; z-index:5;
+    background:
+      radial-gradient(ellipse at center, transparent 55%, rgba(0,3,8,0.55) 100%),
+      repeating-linear-gradient(0deg, rgba(0,229,255,0.025) 0 1px, transparent 1px 3px);
+    mix-blend-mode:screen;
+  }
+
+  .panel {
+    position:absolute; z-index:10;
+    background:var(--panel);
+    border:1px solid var(--panel-line);
+    backdrop-filter:blur(6px);
+    box-shadow:0 0 24px rgba(0,229,255,0.10), inset 0 0 32px rgba(0,229,255,0.04);
+  }
+  .panel::before {
+    content:''; position:absolute; top:-1px; left:-1px; width:10px; height:10px;
+    border-top:1px solid var(--cyan); border-left:1px solid var(--cyan);
+  }
+  .panel::after {
+    content:''; position:absolute; bottom:-1px; right:-1px; width:10px; height:10px;
+    border-bottom:1px solid var(--cyan); border-right:1px solid var(--cyan);
+  }
+
+  /* ── HUD (top-left) ─────────────────────────────────────────── */
+  #hud { top:18px; left:18px; padding:14px 18px; min-width:230px; }
+  #hud .sys { font-size:9px; letter-spacing:0.34em; opacity:0.5; }
+  #hud .title {
+    font-size:20px; letter-spacing:0.16em; margin-top:3px; font-weight:400;
+    text-shadow:0 0 18px rgba(0,229,255,0.55);
+  }
+  #hud .sub { font-size:9px; letter-spacing:0.26em; opacity:0.55; margin-top:2px; }
+  #hud .grid { margin-top:12px; display:grid; grid-template-columns:auto 1fr; gap:3px 14px; font-size:11px; }
+  #hud .k { opacity:0.45; letter-spacing:0.14em; }
+  #hud .v { text-align:right; color:#cdfaff; }
+  #hud .v.amber { color:var(--amber); }
+  #status-row { margin-top:11px; display:flex; align-items:center; gap:8px; font-size:10px; letter-spacing:0.2em; }
+  #dot { width:7px; height:7px; border-radius:50%; background:var(--cyan); box-shadow:0 0 10px var(--cyan); animation:pulse 1.6s infinite; }
+  #dot.warn { background:var(--warn); box-shadow:0 0 10px var(--warn); }
+  #dot.ok { background:var(--ok); box-shadow:0 0 10px var(--ok); }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.3} }
+
+  /* ── control deck (top-right) ───────────────────────────────── */
+  #deck { top:18px; right:18px; width:266px; padding:14px 16px 16px; }
+  #deck h3 { font-size:9px; letter-spacing:0.3em; opacity:0.5; margin:14px 0 7px; font-weight:400; }
+  #deck h3:first-child { margin-top:0; }
+  .row { display:flex; align-items:center; gap:8px; margin-bottom:8px; }
+  .row label { font-size:10px; letter-spacing:0.1em; opacity:0.7; flex:0 0 44px; }
+  input[type=text], input[type=number] {
+    flex:1; background:rgba(0,229,255,0.06); border:1px solid var(--panel-line);
+    color:#cdfaff; font-family:inherit; font-size:11px; padding:5px 7px; letter-spacing:0.06em;
+    outline:none; min-width:0;
+  }
+  input:focus { border-color:var(--cyan); box-shadow:0 0 10px rgba(0,229,255,0.3); }
+  button {
+    background:rgba(0,229,255,0.10); border:1px solid var(--cyan-dim); color:var(--cyan);
+    font-family:inherit; font-size:10px; letter-spacing:0.18em; padding:6px 10px; cursor:pointer;
+    transition:all 0.15s; text-transform:uppercase;
+  }
+  button:hover { background:rgba(0,229,255,0.22); box-shadow:0 0 12px rgba(0,229,255,0.35); }
+  button.full { width:100%; margin-top:2px; }
+  .seg { display:flex; gap:4px; }
+  .seg button { flex:1; padding:6px 0; }
+  .seg button.on { background:var(--cyan); color:#001018; font-weight:700; }
+  input[type=range] { flex:1; accent-color:var(--cyan); background:transparent; }
+  .slabel { display:flex; justify-content:space-between; font-size:10px; opacity:0.7; margin-bottom:3px; letter-spacing:0.1em; }
+  .slabel span:last-child { color:#cdfaff; opacity:1; }
+  .toggle-row { display:flex; justify-content:space-between; align-items:center; margin-bottom:8px; font-size:10px; letter-spacing:0.12em; opacity:0.85; }
+  .sw { width:34px; height:16px; border:1px solid var(--cyan-dim); border-radius:9px; position:relative; cursor:pointer; transition:0.15s; }
+  .sw::after { content:''; position:absolute; top:1px; left:1px; width:12px; height:12px; border-radius:50%; background:var(--cyan-dim); transition:0.15s; }
+  .sw.on { background:rgba(0,229,255,0.25); border-color:var(--cyan); }
+  .sw.on::after { left:18px; background:var(--cyan); box-shadow:0 0 8px var(--cyan); }
+  .hint { font-size:9px; opacity:0.4; letter-spacing:0.06em; line-height:1.5; margin-top:4px; }
+
+  /* ── locator inset (bottom-right) ───────────────────────────── */
+  #locator { bottom:18px; right:18px; width:240px; height:172px; padding:0; overflow:hidden; }
+  #locator iframe { width:100%; height:100%; border:0; filter:grayscale(0.3) brightness(0.85) contrast(1.05); }
+  #locator .cap {
+    position:absolute; top:0; left:0; right:0; z-index:2; padding:4px 8px;
+    font-size:8px; letter-spacing:0.24em; background:linear-gradient(180deg, rgba(0,3,8,0.85), transparent);
+    pointer-events:none;
+  }
+
+  /* ── footer ticker (bottom-left) ────────────────────────────── */
+  #ticker { bottom:18px; left:18px; padding:8px 14px; font-size:9px; letter-spacing:0.22em; opacity:0.7; }
+  #ticker b { color:var(--amber); }
+
+  /* ── boot ───────────────────────────────────────────────────── */
+  #boot {
+    position:absolute; inset:0; z-index:50; background:var(--bg-deep);
+    display:flex; flex-direction:column; align-items:center; justify-content:center; gap:14px;
+    transition:opacity 0.7s; color:var(--cyan);
+  }
+  #boot.gone { opacity:0; pointer-events:none; }
+  #boot .ring { width:54px; height:54px; border:2px solid var(--cyan-faint); border-top-color:var(--cyan); border-radius:50%; animation:spin 0.9s linear infinite; }
+  @keyframes spin { to { transform:rotate(360deg); } }
+  #boot .bt { font-size:11px; letter-spacing:0.34em; opacity:0.7; }
+</style>
+</head>
+<body>
+  <div id="cesiumMain"></div>
+  <div id="fx"></div>
+
+  <!-- HUD -->
+  <div id="hud" class="panel">
+    <div class="sys">PANGEA SPATIAL INTELLIGENCE</div>
+    <div class="title">LOCAL CELL</div>
+    <div class="sub">H3 r<span id="hud-res">7</span> · CENTER + RING k<span id="hud-k">1</span></div>
+    <div class="grid">
+      <div class="k">LAT</div><div class="v" id="t-lat">—</div>
+      <div class="k">LON</div><div class="v" id="t-lon">—</div>
+      <div class="k">ALT</div><div class="v" id="t-alt">—</div>
+      <div class="k">CENTER</div><div class="v amber" id="t-cell">—</div>
+      <div class="k">CELLS</div><div class="v" id="t-count">—</div>
+      <div class="k">FOOTPRINT</div><div class="v" id="t-area">—</div>
+    </div>
+    <div id="status-row"><span id="dot"></span><span id="status">BOOT</span></div>
+  </div>
+
+  <!-- CONTROL DECK -->
+  <div id="deck" class="panel">
+    <h3>TARGET</h3>
+    <div class="row"><label>LAT</label><input type="text" id="in-lat" value="5.934983"></div>
+    <div class="row"><label>LON</label><input type="text" id="in-lon" value="-74.819608"></div>
+    <button class="full" id="btn-go">▸ LOCK COORDINATES</button>
+    <div class="hint">Or click anywhere on the globe to retarget.</div>
+
+    <h3>RESOLUTION</h3>
+    <div class="seg" id="seg-res">
+      <button data-res="6">r6</button>
+      <button data-res="7" class="on">r7</button>
+      <button data-res="8">r8</button>
+    </div>
+    <h3>RING (k)</h3>
+    <div class="seg" id="seg-k">
+      <button data-k="1" class="on">k1</button>
+      <button data-k="2">k2</button>
+      <button data-k="3">k3</button>
+    </div>
+
+    <h3>TERRAIN</h3>
+    <div class="slabel"><span>CONTOUR SPACING</span><span id="lbl-contour">50 m</span></div>
+    <input type="range" id="sl-contour" min="10" max="200" step="10" value="50">
+    <div class="slabel" style="margin-top:8px;"><span>VERTICAL EXAGG.</span><span id="lbl-exag">1.0×</span></div>
+    <input type="range" id="sl-exag" min="1" max="4" step="0.1" value="1">
+
+    <h3>LAYERS</h3>
+    <div class="toggle-row"><span>OPENSTREETMAP OVERLAY</span><div class="sw" id="sw-osm"></div></div>
+    <div class="toggle-row"><span>CONTOUR LINES</span><div class="sw on" id="sw-contour"></div></div>
+    <div class="toggle-row"><span>CLIP TO AOI <i style="opacity:.5">(exp)</i></span><div class="sw" id="sw-clip"></div></div>
+
+    <h3>ION TOKEN <i style="opacity:.5;font-style:normal">(optional)</i></h3>
+    <div class="row"><input type="text" id="in-token" placeholder="paste for World Terrain"></div>
+    <button class="full" id="btn-token">▸ APPLY TOKEN + RELOAD TERRAIN</button>
+    <div class="hint">Leave blank to use the default token. If terrain fails, the view falls back to a smooth ellipsoid and the status reads NO TERR.</div>
+  </div>
+
+  <!-- LOCATOR -->
+  <div id="locator" class="panel">
+    <div class="cap">GLOBAL LOCATOR · OSM</div>
+    <iframe id="loc-frame" loading="lazy" referrerpolicy="no-referrer"></iframe>
+  </div>
+
+  <!-- TICKER -->
+  <div id="ticker" class="panel">DRAG ROTATE · SCROLL ZOOM · CLICK RETARGET &nbsp;·&nbsp; <b id="tk-mode">WORLD TERRAIN</b></div>
+
+  <!-- BOOT -->
+  <div id="boot"><div class="ring"></div><div class="bt">INITIALISING SPATIAL CORE…</div></div>
+
+<script>
+(async function () {
+  const $ = id => document.getElementById(id);
+  const h3 = window.h3;
+
+  // ── state ───────────────────────────────────────────────────
+  const state = {
+    lat: 5.934983, lon: -74.819608,   // Río Claro default AOI
+    res: 7, k: 1,
+    contour: 50, exag: 1.0,
+    osm: false, showContour: true, clip: false,
+    cells: [],
+  };
+
+  function setStatus(txt, cls) {
+    $('status').textContent = txt;
+    const dot = $('dot'); dot.className = ''; if (cls) dot.classList.add(cls);
+  }
+
+  // ── viewer ──────────────────────────────────────────────────
+  // ── ion token (yours, from project history) ─────────────────
+  Cesium.Ion.defaultAccessToken = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJqdGkiOiIxZDg4N2JhMy0yYjZmLTQyNWYtOWYxOS0wOTgzYzdiMTAyN2MiLCJpZCI6NDAwNDE5LCJpYXQiOjE3NzMwMDIxMzd9._lZyiTNSuapslmg-vfAwvD3pp0zKtXjW94l3hIpDq_8';
+
+  const viewer = new Cesium.Viewer('cesiumMain', {
+    baseLayer: false,            // skip the wasted ion imagery request
+    baseLayerPicker: false,
+    geocoder: false,
+    homeButton: false,
+    sceneModePicker: false,
+    navigationHelpButton: false,
+    timeline: false,
+    animation: false,
+    infoBox: false,
+    selectionIndicator: false,
+    skyBox: false,
+    skyAtmosphere: false,
+  });
+
+  const scene = viewer.scene;
+  const globe = scene.globe;
+
+  // holographic styling
+  scene.backgroundColor = Cesium.Color.fromCssColorString('#000308');
+  globe.baseColor = Cesium.Color.fromCssColorString('#021622');
+  globe.showGroundAtmosphere = false;
+  globe.enableLighting = false;
+  globe.depthTestAgainstTerrain = true;
+  globe.maximumScreenSpaceError = 0.8;   // dense mesh; 0.8 is plenty at ~6 km
+  globe.tileCacheSize = 1000;
+  scene.fog.enabled = false;
+  scene.highDynamicRange = false;
+
+  // disable default double-click entity tracking
+  viewer.screenSpaceEventHandler.removeInputAction(Cesium.ScreenSpaceEventType.LEFT_DOUBLE_CLICK);
+
+  // ── terrain (async, with fallback) ──────────────────────────
+  let osmLayer = null;
+  let cellEntities = [];
+
+  async function loadTerrain() {
+    setStatus('TERRAIN…');
+    $('tk-mode').textContent = 'WORLD TERRAIN';
+    try {
+      const t = await Cesium.createWorldTerrainAsync({ requestVertexNormals: true });
+      globe.terrainProvider = t;
+      setStatus('LOCK', 'ok');
+    } catch (e) {
+      console.warn('Terrain failed → ellipsoid:', e);
+      globe.terrainProvider = new Cesium.EllipsoidTerrainProvider();
+      $('tk-mode').textContent = 'NO TERRAIN (ELLIPSOID)';
+      setStatus('NO TERR', 'warn');
+    }
+    applyContour();
+    applyExag();
+  }
+
+  // ── globe material: elevation contours ──────────────────────
+  function applyContour() {
+    if (state.showContour) {
+      globe.material = Cesium.Material.fromType('ElevationContour', {
+        spacing: state.contour,
+        color: Cesium.Color.fromCssColorString('#00e5ff').withAlpha(0.85),
+        width: 1.4,
+      });
+    } else {
+      globe.material = undefined;
+    }
+  }
+  function applyExag() {
+    try { scene.verticalExaggeration = state.exag; }
+    catch (e) { try { globe.terrainExaggeration = state.exag; } catch (_) {} }
+  }
+
+  // ── OSM overlay ─────────────────────────────────────────────
+  function setOSM(on) {
+    state.osm = on;
+    if (on && !osmLayer) {
+      osmLayer = viewer.imageryLayers.addImageryProvider(
+        new Cesium.OpenStreetMapImageryProvider({ url: 'https://tile.openstreetmap.org/' })
+      );
+      osmLayer.alpha = 0.7;
+    } else if (!on && osmLayer) {
+      viewer.imageryLayers.remove(osmLayer, true);
+      osmLayer = null;
+    }
+  }
+
+  // ── AOI builder ─────────────────────────────────────────────
+  // average res-7 cell area for footprint readout
+  const RES_AREA_KM2 = { 6: 36.129, 7: 5.161, 8: 0.737 };
+
+  function clearCells() {
+    cellEntities.forEach(e => viewer.entities.remove(e));
+    cellEntities = [];
+    globe.clippingPolygons = undefined;
+  }
+
+  function buildAOI(lat, lon) {
+    state.lat = lat; state.lon = lon;
+    clearCells();
+
+    const center = h3.latLngToCell(lat, lon, state.res);
+    const cells = h3.gridDisk(center, state.k);
+    state.cells = cells;
+
+    const allPts = [];
+    for (const cell of cells) {
+      const isCenter = cell === center;
+      const boundary = h3.cellToBoundary(cell);            // [[lat,lng],...]
+      const flat = [];
+      for (const [la, ln] of boundary) { flat.push(ln, la); allPts.push(Cesium.Cartesian3.fromDegrees(ln, la)); }
+
+      // glowing outline
+      cellEntities.push(viewer.entities.add({
+        polyline: {
+          positions: Cesium.Cartesian3.fromDegreesArray(flat.concat(flat[0], flat[1])),
+          width: isCenter ? 3.5 : 2,
+          clampToGround: true,
+          material: new Cesium.PolylineGlowMaterialProperty({
+            glowPower: 0.25,
+            color: Cesium.Color.fromCssColorString(isCenter ? '#ffaa00' : '#00e5ff'),
+          }),
+        },
+      }));
+      // faint terrain-clamped fill
+      cellEntities.push(viewer.entities.add({
+        polygon: {
+          hierarchy: Cesium.Cartesian3.fromDegreesArray(flat),
+          material: Cesium.Color.fromCssColorString(isCenter ? '#ffaa00' : '#00e5ff')
+            .withAlpha(isCenter ? 0.10 : 0.045),
+          classificationType: Cesium.ClassificationType.TERRAIN,
+        },
+      }));
+    }
+
+    if (state.clip) applyClip(cells);
+
+    // telemetry
+    $('t-cell').textContent = center;
+    $('t-count').textContent = cells.length;
+    const area = (RES_AREA_KM2[state.res] || 0) * cells.length;
+    $('t-area').textContent = '≈ ' + area.toFixed(1) + ' km²';
+    $('hud-res').textContent = state.res;
+    $('hud-k').textContent = state.k;
+    updateLocator(lat, lon);
+
+    // frame obliquely on union
+    const bs = Cesium.BoundingSphere.fromPoints(allPts);
+    setStatus('FRAMING…');
+    viewer.camera.flyToBoundingSphere(bs, {
+      duration: 2.4,
+      offset: new Cesium.HeadingPitchRange(
+        Cesium.Math.toRadians(25),
+        Cesium.Math.toRadians(-38),
+        Math.max(bs.radius * 3.2, 2500),
+      ),
+      complete: () => setStatus(globe.terrainProvider instanceof Cesium.EllipsoidTerrainProvider ? 'NO TERR' : 'LOCK',
+                                globe.terrainProvider instanceof Cesium.EllipsoidTerrainProvider ? 'warn' : 'ok'),
+    });
+  }
+
+  // ── experimental: clip globe to AOI union ───────────────────
+  function applyClip(cells) {
+    try {
+      const mp = h3.cellsToMultiPolygon(cells, true);  // GeoJSON: [ [ [ [lng,lat],... ] ] ]
+      const ring = mp[0][0];                            // exterior ring of union
+      const flat = [];
+      for (const [ln, la] of ring) flat.push(ln, la);
+      globe.clippingPolygons = new Cesium.ClippingPolygonCollection({
+        polygons: [ new Cesium.ClippingPolygon({ positions: Cesium.Cartesian3.fromDegreesArray(flat) }) ],
+        inverse: true,   // keep inside, clip the rest of the planet
+      });
+    } catch (e) { console.warn('Clip failed:', e); }
+  }
+
+  // ── locator inset (OSM embed) ───────────────────────────────
+  function updateLocator(lat, lon) {
+    const d = 0.35; // bbox half-width in degrees → regional context
+    const bbox = [lon - d, lat - d, lon + d, lat + d].join('%2C');
+    $('loc-frame').src =
+      `https://www.openstreetmap.org/export/embed.html?bbox=${bbox}&layer=mapnik&marker=${lat}%2C${lon}`;
+  }
+
+  // ── per-frame telemetry ─────────────────────────────────────
+  const fmtDeg = d => (d >= 0 ? '' : '-') + Math.abs(d).toFixed(5) + '°';
+  const fmtM = m => m >= 1000 ? (m / 1000).toFixed(1) + ' km' : m.toFixed(0) + ' m';
+  scene.preRender.addEventListener(() => {
+    const c = viewer.camera.positionCartographic;
+    $('t-lat').textContent = fmtDeg(Cesium.Math.toDegrees(c.latitude));
+    $('t-lon').textContent = fmtDeg(Cesium.Math.toDegrees(c.longitude));
+    $('t-alt').textContent = fmtM(c.height);
+  });
+
+  // ── click to retarget ───────────────────────────────────────
+  const handler = new Cesium.ScreenSpaceEventHandler(scene.canvas);
+  handler.setInputAction((click) => {
+    const cart = scene.pickPosition(click.position) ||
+                 viewer.camera.pickEllipsoid(click.position, globe.ellipsoid);
+    if (!cart) return;
+    const carto = Cesium.Cartographic.fromCartesian(cart);
+    const lat = Cesium.Math.toDegrees(carto.latitude);
+    const lon = Cesium.Math.toDegrees(carto.longitude);
+    $('in-lat').value = lat.toFixed(6);
+    $('in-lon').value = lon.toFixed(6);
+    buildAOI(lat, lon);
+  }, Cesium.ScreenSpaceEventType.LEFT_CLICK);
+
+  // ── controls wiring ─────────────────────────────────────────
+  $('btn-go').onclick = () => {
+    const lat = parseFloat($('in-lat').value), lon = parseFloat($('in-lon').value);
+    if (Number.isFinite(lat) && Number.isFinite(lon)) buildAOI(lat, lon);
+  };
+  $('in-lat').addEventListener('keydown', e => { if (e.key === 'Enter') $('btn-go').click(); });
+  $('in-lon').addEventListener('keydown', e => { if (e.key === 'Enter') $('btn-go').click(); });
+
+  $('seg-res').addEventListener('click', e => {
+    const b = e.target.closest('button'); if (!b) return;
+    [...$('seg-res').children].forEach(x => x.classList.remove('on'));
+    b.classList.add('on'); state.res = +b.dataset.res;
+    buildAOI(state.lat, state.lon);
+  });
+  $('seg-k').addEventListener('click', e => {
+    const b = e.target.closest('button'); if (!b) return;
+    [...$('seg-k').children].forEach(x => x.classList.remove('on'));
+    b.classList.add('on'); state.k = +b.dataset.k;
+    buildAOI(state.lat, state.lon);
+  });
+
+  $('sl-contour').oninput = e => { state.contour = +e.target.value; $('lbl-contour').textContent = state.contour + ' m'; applyContour(); };
+  $('sl-exag').oninput = e => { state.exag = +e.target.value; $('lbl-exag').textContent = state.exag.toFixed(1) + '×'; applyExag(); };
+
+  const toggle = (sw, fn) => $(sw).addEventListener('click', () => {
+    const on = !$(sw).classList.contains('on');
+    $(sw).classList.toggle('on', on); fn(on);
+  });
+  toggle('sw-osm', on => setOSM(on));
+  toggle('sw-contour', on => { state.showContour = on; applyContour(); });
+  toggle('sw-clip', on => { state.clip = on; buildAOI(state.lat, state.lon); });
+
+  $('btn-token').onclick = async () => {
+    const tok = $('in-token').value.trim();
+    if (tok) Cesium.Ion.defaultAccessToken = tok;
+    await loadTerrain();
+    buildAOI(state.lat, state.lon);
+  };
+
+  // ── boot sequence ───────────────────────────────────────────
+  setStatus('READY');
+  await loadTerrain();
+  buildAOI(state.lat, state.lon);
+
+  setTimeout(() => {
+    const boot = $('boot'); boot.classList.add('gone');
+    setTimeout(() => boot.remove(), 800);
+  }, 900);
+
+})().catch(err => {
+  console.error(err);
+  const boot = document.getElementById('boot');
+  if (boot) boot.innerHTML =
+    '<div style="text-align:center;max-width:80%;color:#ff5a4d;font-family:monospace;font-size:12px;letter-spacing:.06em;line-height:1.6">'
+    + '<div style="letter-spacing:.3em;margin-bottom:12px">INIT FAILED</div>'
+    + (err && err.message ? err.message : String(err)) + '</div>';
+});
+</script>
+</body>
+</html>
