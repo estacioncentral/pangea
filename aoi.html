@@ -500,7 +500,8 @@
     try{
       let prov=null;
       if(mode==='BING'){ prov=await C.createWorldImageryAsync(); }
-      else { prov=new C.UrlTemplateImageryProvider({ url:IMG_URLS[mode], maximumLevel:(mode==='ESRI'?19:16), credit:mode }); }
+      else { prov=new C.UrlTemplateImageryProvider({ url:IMG_URLS[mode], maximumLevel:(mode==='ESRI'?19:(mode==='LANDSAT'?12:16)), credit:mode }); }
+      if(mode==='LANDSAT') dlog('Landsat capped at z12 (~30m native) to stay under RealEarth free quota of 500 MP/24h','info');
       if(prov){
         if(prov.errorEvent) prov.errorEvent.addEventListener(err=>dlog('['+mode+'] tile error: '+((err&&err.message)||err),'error'));
         imgLayer=viewer.imageryLayers.addImageryProvider(prov);
