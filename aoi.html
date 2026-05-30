@@ -111,6 +111,16 @@
     box-shadow:0 0 16px rgba(0,229,255,0.25);}
   #cellinfo .ci-id{color:var(--amber);font-size:9px;}
 
+  /* debug console */
+  #debug{ bottom:16px; right:16px; width:360px; height:200px; padding:0; display:flex; flex-direction:column; z-index:12; }
+  #debug.min{ height:auto; }
+  #debug.min #dbg-log{ display:none; }
+  .dbg-head{ display:flex; justify-content:space-between; align-items:center; padding:6px 10px; font-size:8.5px; letter-spacing:0.2em; border-bottom:1px solid var(--line); opacity:0.85; }
+  .dbg-btn{ font-size:8px; padding:3px 7px; letter-spacing:0.12em; margin-left:4px; }
+  #dbg-log{ flex:1; overflow-y:auto; padding:6px 10px; font-size:9.5px; line-height:1.55; }
+  #dbg-log::-webkit-scrollbar{width:5px;} #dbg-log::-webkit-scrollbar-thumb{background:var(--cyan-dim);}
+  .dl{ white-space:pre-wrap; word-break:break-word; }
+  .dl.info{ color:#9fdfff; opacity:0.85; } .dl.ok{ color:var(--ok); } .dl.warn{ color:var(--amber); } .dl.error{ color:var(--warn); }
   /* boot */
   #boot{position:absolute;inset:0;z-index:50;background:var(--bg-deep);display:flex;flex-direction:column;
     align-items:center;justify-content:center;gap:14px;transition:opacity 0.7s;}
@@ -226,12 +236,21 @@
     </select>
     <div class="slabel" style="margin-top:7px;"><span>OVERLAY OPACITY</span><span id="lbl-imgop">100%</span></div>
     <input type="range" id="sl-imgop" min="0" max="100" step="5" value="100">
+    <div class="slabel" style="margin-top:6px;"><span>SATURATION</span><span id="lbl-sat">1.0&times;</span></div>
+    <input type="range" id="sl-sat" min="0" max="3" step="0.1" value="1">
+    <div class="slabel" style="margin-top:6px;"><span>CONTRAST</span><span id="lbl-con">1.0&times;</span></div>
+    <input type="range" id="sl-con" min="0" max="3" step="0.1" value="1">
+    <div class="slabel" style="margin-top:6px;"><span>BRIGHTNESS</span><span id="lbl-bri">1.0&times;</span></div>
+    <input type="range" id="sl-bri" min="0" max="2" step="0.05" value="1">
     <div class="toggle-row" style="margin-top:8px;"><span>H3 WIREFRAME</span><div class="sw on" id="sw-h3"></div></div>
     <div class="toggle-row"><span>HEX PRISMS &rarr; SEA LEVEL</span><div class="sw on" id="sw-prism"></div></div>
 
     <h3>NAVIGATION</h3>
     <div class="toggle-row"><span>ORBIT AROUND CENTER</span><div class="sw on" id="sw-orbit"></div></div>
     <div class="hint">Camera gimbals around the center cell instead of the globe. Toggle off for free flight.</div>
+
+    <h3>DIAGNOSTICS</h3>
+    <div class="toggle-row"><span>DEBUG CONSOLE [`]</span><div class="sw on" id="sw-debug"></div></div>
   </div>
 
   <!-- ANALYTICS -->
@@ -256,6 +275,15 @@
   <!-- CELL TOOLTIP -->
   <div id="cellinfo"></div>
 
+  <!-- DEBUG -->
+  <div id="debug" class="panel">
+    <div class="dbg-head">
+      <span>DEBUG &middot; SERVICE MONITOR</span>
+      <span><button class="dbg-btn" id="btn-test">TEST</button><button class="dbg-btn" id="btn-clear">CLR</button><button class="dbg-btn" id="btn-dbgmin">_</button></span>
+    </div>
+    <div id="dbg-log"></div>
+  </div>
+
   <!-- BOOT -->
   <div id="boot"><div class="ring"></div><div class="bt">INITIALISING SPATIAL CORE&hellip;</div></div>
 
@@ -265,6 +293,21 @@
   const h3 = window.h3;
   const C = Cesium;
 
+  // ── debug console ───────────────────────────────────────────
+  function dlog(msg, level){
+    try{
+      const el=document.getElementById('dbg-log'); if(!el) return;
+      const t=new Date().toTimeString().slice(0,8);
+      const ln=document.createElement('div'); ln.className='dl '+(level||'info');
+      ln.textContent=t+'  '+msg; el.appendChild(ln); el.scrollTop=el.scrollHeight;
+      while(el.childNodes.length>250) el.removeChild(el.firstChild);
+    }catch(_){}
+  }
+  ['warn','error'].forEach(k=>{ const o=console[k].bind(console);
+    console[k]=(...a)=>{ o(...a); dlog(a.map(x=>typeof x==='object'?(x&&x.message||JSON.stringify(x)):x).join(' '), k==='error'?'error':'warn'); }; });
+  window.addEventListener('error', e=>dlog('JS error: '+e.message+(e.filename?(' @'+e.filename.split('/').pop()+':'+e.lineno):''),'error'));
+  window.addEventListener('unhandledrejection', e=>dlog('promise rejection: '+((e.reason&&e.reason.message)||e.reason),'error'));
+
   // ion token (yours, from project history)
   C.Ion.defaultAccessToken = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJqdGkiOiIxZDg4N2JhMy0yYjZmLTQyNWYtOWYxOS0wOTgzYzdiMTAyN2MiLCJpZCI6NDAwNDE5LCJpYXQiOjE3NzMwMDIxMzd9._lZyiTNSuapslmg-vfAwvD3pp0zKtXjW94l3hIpDq_8';
 
@@ -273,7 +316,7 @@
     fill:'RAMP', contours:true, fillOpacity:1.0, pal:'SHARP', rampMin:-500, rampMax:7000, autoRamp:true, localMin:null, localMax:null,
     contour:50, exag:1.0, sse:0.3, majorEvery:5, minorWidth:1.0, majorWidth:2.0, colorElev:true,
     day:172, hour:12, light:true, shadow:false,
-    clip:true, imagery:'NONE', imgOpacity:1.0, orbit:true, h3:true, prism:true,
+    clip:true, imagery:'NONE', imgOpacity:1.0, imgSat:1.0, imgCon:1.0, imgBri:1.0, orbit:true, h3:true, prism:true,
     cells:[], center:null, bounds:null, _bs:null, localMean:null, cellHeights:[], _buildId:0,
   };
   const PALS = ['SHARP','SOFT','MONO'];
@@ -323,10 +366,10 @@
     setStatus('TERRAIN…');
     try {
       const t = await C.createWorldTerrainAsync({ requestVertexNormals:true });
-      globe.terrainProvider = t; setStatus('LOCK','ok');
+      globe.terrainProvider = t; setStatus('LOCK','ok'); dlog('terrain: Cesium World Terrain ready','ok');
     } catch(e) {
       console.warn('terrain → ellipsoid', e);
-      globe.terrainProvider = new C.EllipsoidTerrainProvider(); setStatus('NO TERR','warn');
+      globe.terrainProvider = new C.EllipsoidTerrainProvider(); setStatus('NO TERR','warn'); dlog('terrain FAILED → ellipsoid fallback','error');
     }
     applyMaterial(); applyExag();
   }
@@ -422,24 +465,49 @@
   }
 
   // ── imagery overlay (OSM / Bing / Sentinel-2 / Landsat) ─────
+  const IMG_URLS = {
+    OSM:     'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+    ESRI:    'https://services.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+    S2:      'https://tiles.maps.eox.at/wmts/1.0.0/s2cloudless-2020_3857/default/g/{z}/{y}/{x}.jpg',
+    LANDSAT: 'https://realearth.ssec.wisc.edu/tiles/lsat8-llook-fc/{z}/{x}/{y}.png',
+  };
   let imgLayer=null;
+  function applyImgAdjust(){
+    if(!imgLayer) return;
+    imgLayer.alpha=state.imgOpacity; imgLayer.saturation=state.imgSat;
+    imgLayer.contrast=state.imgCon;  imgLayer.brightness=state.imgBri;
+  }
+  function syncImgAdjustUI(){
+    $('sl-imgop').value=Math.round(state.imgOpacity*100); $('lbl-imgop').textContent=Math.round(state.imgOpacity*100)+'%';
+    $('sl-sat').value=state.imgSat; $('lbl-sat').textContent=state.imgSat.toFixed(1)+'\u00d7';
+    $('sl-con').value=state.imgCon; $('lbl-con').textContent=state.imgCon.toFixed(1)+'\u00d7';
+    $('sl-bri').value=state.imgBri; $('lbl-bri').textContent=state.imgBri.toFixed(2)+'\u00d7';
+  }
   async function setImagery(mode){
     state.imagery=mode;
-    // let imagery show through: thin the ramp/slope fill when an overlay is active, restore when off
+    // thin the ramp/slope fill so imagery shows through; restore when off
     state.fillOpacity = (mode==='NONE') ? 1.0 : 0.30;
     $('sl-fillop').value = Math.round(state.fillOpacity*100);
     $('lbl-fillop').textContent = Math.round(state.fillOpacity*100)+'%';
     applyMaterial();
+    // Landsat is low-contrast/dull → punch up saturation & contrast by default
+    if(mode==='LANDSAT'){ state.imgSat=2.2; state.imgCon=1.5; state.imgBri=1.08; }
+    else if(mode!=='NONE'){ state.imgSat=1.15; state.imgCon=1.05; state.imgBri=1.0; }
+    else { state.imgSat=1.0; state.imgCon=1.0; state.imgBri=1.0; }
+    syncImgAdjustUI();
     if(imgLayer){ viewer.imageryLayers.remove(imgLayer,true); imgLayer=null; }
+    if(mode==='NONE'){ dlog('imagery \u2192 NONE','info'); return; }
     try{
       let prov=null;
-      if(mode==='OSM'){ prov=new C.OpenStreetMapImageryProvider({url:'https://tile.openstreetmap.org/'}); }
-      else if(mode==='ESRI'){ prov=new C.UrlTemplateImageryProvider({ url:'https://services.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', maximumLevel:19, credit:'Esri World Imagery' }); }
-      else if(mode==='BING'){ prov=await C.createWorldImageryAsync(); }
-      else if(mode==='S2'){ prov=new C.UrlTemplateImageryProvider({ url:'https://tiles.maps.eox.at/wmts/1.0.0/s2cloudless-2020_3857/default/g/{z}/{y}/{x}.jpg', maximumLevel:16, credit:'Sentinel-2 cloudless 2020 by EOX (Copernicus)' }); }
-      else if(mode==='LANDSAT'){ prov=new C.UrlTemplateImageryProvider({ url:'https://realearth.ssec.wisc.edu/tiles/lsat8-llook-fc/{z}/{x}/{y}.png', maximumLevel:16, credit:'Landsat 8 LandsatLook \u00b7 SSEC RealEarth' }); }
-      if(prov){ imgLayer=viewer.imageryLayers.addImageryProvider(prov); imgLayer.alpha=state.imgOpacity; }
-    }catch(e){ console.warn('imagery failed:',mode,e); }
+      if(mode==='BING'){ prov=await C.createWorldImageryAsync(); }
+      else { prov=new C.UrlTemplateImageryProvider({ url:IMG_URLS[mode], maximumLevel:(mode==='ESRI'?19:16), credit:mode }); }
+      if(prov){
+        if(prov.errorEvent) prov.errorEvent.addEventListener(err=>dlog('['+mode+'] tile error: '+((err&&err.message)||err),'error'));
+        imgLayer=viewer.imageryLayers.addImageryProvider(prov);
+        applyImgAdjust();
+        dlog('imagery \u2192 '+mode+' \u00b7 provider ready','ok');
+      }
+    }catch(e){ dlog('imagery FAILED ['+mode+']: '+((e&&e.message)||e),'error'); }
   }
 
   // ── orbit lock: gimbal around the centre cell ───────────────
@@ -716,11 +784,38 @@
   toggle('sw-clip',on=>{ state.clip=on; on?applyIsolation():clearIsolation(); });
   toggle('sw-contours',on=>{ state.contours=on; applyMaterial(); });
   $('sel-img').onchange=e=>setImagery(e.target.value);
-  $('sl-imgop').oninput=e=>{ state.imgOpacity=+e.target.value/100; $('lbl-imgop').textContent=e.target.value+'%'; if(imgLayer)imgLayer.alpha=state.imgOpacity; };
+  $('sl-imgop').oninput=e=>{ state.imgOpacity=+e.target.value/100; $('lbl-imgop').textContent=e.target.value+'%'; applyImgAdjust(); };
+  $('sl-sat').oninput=e=>{ state.imgSat=+e.target.value; $('lbl-sat').textContent=state.imgSat.toFixed(1)+'\u00d7'; applyImgAdjust(); };
+  $('sl-con').oninput=e=>{ state.imgCon=+e.target.value; $('lbl-con').textContent=state.imgCon.toFixed(1)+'\u00d7'; applyImgAdjust(); };
+  $('sl-bri').oninput=e=>{ state.imgBri=+e.target.value; $('lbl-bri').textContent=state.imgBri.toFixed(2)+'\u00d7'; applyImgAdjust(); };
   $('sl-fillop').oninput=e=>{ state.fillOpacity=+e.target.value/100; $('lbl-fillop').textContent=e.target.value+'%'; applyMaterial(); };
   toggle('sw-orbit',on=>{ state.orbit=on; if(on) lockOrbit(); else cam.lookAtTransform(C.Matrix4.IDENTITY); });
   toggle('sw-h3',on=>{ state.h3=on; hexEnts.forEach(e=>{e.polyline.show=on;}); });
   toggle('sw-prism',on=>{ state.prism=on; buildAOI(state.lat,state.lon); });
+  toggle('sw-debug',on=>{ document.getElementById('debug').style.display=on?'flex':'none'; });
+  document.getElementById('btn-clear').onclick=()=>{ document.getElementById('dbg-log').innerHTML=''; dlog('cleared','info'); };
+  document.getElementById('btn-dbgmin').onclick=()=>{ document.getElementById('debug').classList.toggle('min'); };
+  document.getElementById('btn-test').onclick=testService;
+  function testService(){
+    const mode=state.imagery;
+    dlog('── TEST · imagery='+mode+' · lat='+state.lat.toFixed(4)+' lon='+state.lon.toFixed(4),'info');
+    if(mode==='NONE'){ dlog('no imagery layer selected','warn'); return; }
+    if(mode==='BING'){ dlog('Bing served via Cesium ion token — verify directly on globe','info'); return; }
+    const z=10, n=Math.pow(2,z);
+    const xt=Math.floor((state.lon+180)/360*n);
+    const lr=state.lat*Math.PI/180;
+    const yt=Math.floor((1-Math.log(Math.tan(lr)+1/Math.cos(lr))/Math.PI)/2*n);
+    const url=IMG_URLS[mode].replace('{z}',z).replace('{x}',xt).replace('{y}',yt);
+    dlog('probe '+mode+' z'+z+' x'+xt+' y'+yt,'info');
+    const a=new Image();
+    a.onload=()=>dlog('\u2713 tile EXISTS here ('+a.naturalWidth+'\u00d7'+a.naturalHeight+')','ok');
+    a.onerror=()=>dlog('\u2717 tile NOT available here (404 / no coverage / unreachable)','error');
+    a.src=url+(url.includes('?')?'&':'?')+'_p='+Date.now();
+    const b=new Image(); b.crossOrigin='anonymous';
+    b.onload=()=>dlog('\u2713 CORS OK \u2014 Cesium can render this layer in 3D','ok');
+    b.onerror=()=>dlog('\u26a0 CORS blocked or unreachable \u2014 may load in locator but not on globe','warn');
+    b.src=url+(url.includes('?')?'&':'?')+'_c='+Date.now();
+  }
 
   $('sl-major').oninput=e=>{ state.majorEvery=+e.target.value; $('lbl-major').textContent=state.majorEvery+'\u00d7'; applyMaterial(); };
   $('sl-minw').oninput=e=>{ state.minorWidth=+e.target.value; $('lbl-minw').textContent=state.minorWidth.toFixed(1)+' px'; applyMaterial(); };
@@ -739,6 +834,9 @@
 
   // ── boot ────────────────────────────────────────────────────
   setStatus('READY');
+  dlog('spatial core init','info');
+  let _lastQ=-1;
+  globe.tileLoadProgressEvent.addEventListener(q=>{ if(q===0&&_lastQ>0) dlog('tiles settled','info'); _lastQ=q; });
   applyAutoClass();
   updateWindowUI();
   globe.enableLighting=state.light;
