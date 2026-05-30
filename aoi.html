@@ -168,6 +168,8 @@
       <button data-fill="NONE">NONE</button><button data-fill="RAMP" class="on">RAMP</button><button data-fill="SLOPE">SLOPE</button>
     </div>
     <div class="toggle-row" style="margin-top:8px;"><span>CONTOUR LINES [C]</span><div class="sw on" id="sw-contours"></div></div>
+    <div class="slabel" style="margin-top:8px;"><span>FILL OPACITY</span><span id="lbl-fillop">100%</span></div>
+    <input type="range" id="sl-fillop" min="0" max="100" step="5" value="100">
 
     <div id="ramp-ctrls" style="display:none;">
       <div class="row" style="margin-top:8px;"><label>PAL</label><button class="full" id="btn-pal" style="margin:0;">SHARP</button></div>
@@ -222,8 +224,8 @@
       <option value="S2">Copernicus &middot; Sentinel-2</option>
       <option value="LANDSAT">Landsat &middot; NASA GIBS</option>
     </select>
-    <div class="slabel" style="margin-top:7px;"><span>OVERLAY OPACITY</span><span id="lbl-imgop">70%</span></div>
-    <input type="range" id="sl-imgop" min="0" max="100" step="5" value="70">
+    <div class="slabel" style="margin-top:7px;"><span>OVERLAY OPACITY</span><span id="lbl-imgop">100%</span></div>
+    <input type="range" id="sl-imgop" min="0" max="100" step="5" value="100">
     <div class="toggle-row" style="margin-top:8px;"><span>H3 WIREFRAME</span><div class="sw on" id="sw-h3"></div></div>
     <div class="toggle-row"><span>HEX PRISMS &rarr; SEA LEVEL</span><div class="sw on" id="sw-prism"></div></div>
 
@@ -268,10 +270,10 @@
 
   const state = {
     lat:5.934983, lon:-74.819608, res:7, k:1,
-    fill:'RAMP', contours:true, pal:'SHARP', rampMin:-500, rampMax:7000, autoRamp:true, localMin:null, localMax:null,
+    fill:'RAMP', contours:true, fillOpacity:1.0, pal:'SHARP', rampMin:-500, rampMax:7000, autoRamp:true, localMin:null, localMax:null,
     contour:50, exag:1.0, sse:0.3, majorEvery:5, minorWidth:1.0, majorWidth:2.0, colorElev:true,
     day:172, hour:12, light:true, shadow:false,
-    clip:true, imagery:'NONE', imgOpacity:0.7, orbit:true, h3:true, prism:true,
+    clip:true, imagery:'NONE', imgOpacity:1.0, orbit:true, h3:true, prism:true,
     cells:[], center:null, bounds:null, _bs:null, localMean:null, cellHeights:[], _buildId:0,
   };
   const PALS = ['SHARP','SOFT','MONO'];
@@ -308,7 +310,7 @@
   globe.tileCacheSize = 1000;
   scene.fog.enabled = false; scene.highDynamicRange = false;
   try{ scene.msaaSamples = 4; }catch(e){}
-  if(scene.postProcessStages && scene.postProcessStages.fxaa) scene.postProcessStages.fxaa.enabled = true;
+  if(scene.postProcessStages && scene.postProcessStages.fxaa) scene.postProcessStages.fxaa.enabled = false; // FXAA softens imagery; MSAA handles edges
   viewer.clock.shouldAnimate = false;
   viewer.screenSpaceEventHandler.removeInputAction(C.ScreenSpaceEventType.LEFT_DOUBLE_CLICK);
   // render at native device resolution (fixes soft/blurry imagery on HiDPI displays)
@@ -362,8 +364,8 @@
       float sl = clamp(materialInput.slope / czm_piOverTwo, 0.0, 1.0);
       vec4 slopeC = texture(slopeImage, vec2(sl, 0.5));
       vec3 fillColor = vec3(0.0); float fillA = 0.0;
-      if(fillMode > 1.5){ fillColor = slopeC.rgb; fillA = 1.0; }
-      else if(fillMode > 0.5){ fillColor = rampC.rgb; fillA = 1.0; }
+      if(fillMode > 1.5){ fillColor = slopeC.rgb; fillA = fillOpacity; }
+      else if(fillMode > 0.5){ fillColor = rampC.rgb; fillA = fillOpacity; }
       float lineA = 0.0; vec3 lineCol = lineColor.rgb;
       if(contoursOn > 0.5){
         float dH = max(fwidth(h), 0.001);
@@ -386,7 +388,7 @@
       uniforms:{
         rampImage: rampCanvas(), slopeImage: slopeCanvas(),
         fillMode: state.fill==='SLOPE'?2.0:(state.fill==='RAMP'?1.0:0.0),
-        contoursOn: state.contours?1.0:0.0,
+        contoursOn: state.contours?1.0:0.0, fillOpacity: state.fillOpacity,
         spacing: state.contour, majorEvery: state.majorEvery,
         minorWidth: state.minorWidth, majorWidth: state.majorWidth, minorAlpha: 0.55,
         minHeight: state.rampMin*state.exag, maxHeight: state.rampMax*state.exag,
@@ -423,6 +425,11 @@
   let imgLayer=null;
   async function setImagery(mode){
     state.imagery=mode;
+    // let imagery show through: thin the ramp/slope fill when an overlay is active, restore when off
+    state.fillOpacity = (mode==='NONE') ? 1.0 : 0.30;
+    $('sl-fillop').value = Math.round(state.fillOpacity*100);
+    $('lbl-fillop').textContent = Math.round(state.fillOpacity*100)+'%';
+    applyMaterial();
     if(imgLayer){ viewer.imageryLayers.remove(imgLayer,true); imgLayer=null; }
     try{
       let prov=null;
@@ -430,7 +437,7 @@
       else if(mode==='ESRI'){ prov=new C.UrlTemplateImageryProvider({ url:'https://services.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', maximumLevel:19, credit:'Esri World Imagery' }); }
       else if(mode==='BING'){ prov=await C.createWorldImageryAsync(); }
       else if(mode==='S2'){ prov=new C.UrlTemplateImageryProvider({ url:'https://tiles.maps.eox.at/wmts/1.0.0/s2cloudless-2020_3857/default/g/{z}/{y}/{x}.jpg', maximumLevel:16, credit:'Sentinel-2 cloudless 2020 by EOX (Copernicus)' }); }
-      else if(mode==='LANDSAT'){ prov=new C.WebMapTileServiceImageryProvider({ url:'https://gibs.earthdata.nasa.gov/wmts/epsg4326/best/Landsat_WELD_CorrectedReflectance_TrueColor_Global/default/2012-01-01/250m/{TileMatrix}/{TileRow}/{TileCol}.jpg', layer:'Landsat_WELD_CorrectedReflectance_TrueColor_Global', style:'default', format:'image/jpeg', tileMatrixSetID:'250m', tilingScheme:new C.GeographicTilingScheme(), tileWidth:512, tileHeight:512, maximumLevel:7, credit:'NASA GIBS / Landsat WELD (annual ~30m mosaic, coarse)' }); }
+      else if(mode==='LANDSAT'){ prov=new C.WebMapTileServiceImageryProvider({ url:'https://gibs.earthdata.nasa.gov/wmts/epsg4326/best/wmts.cgi', layer:'Landsat_WELD_CorrectedReflectance_TrueColor_Global', style:'', format:'image/jpeg', tileMatrixSetID:'31.25m', tilingScheme:new C.GeographicTilingScheme(), tileWidth:512, tileHeight:512, maximumLevel:11, dimensions:{ Time:'2012-01-01' }, credit:'NASA GIBS / Landsat WELD (annual ~30m)' }); }
       if(prov){ imgLayer=viewer.imageryLayers.addImageryProvider(prov); imgLayer.alpha=state.imgOpacity; }
     }catch(e){ console.warn('imagery failed:',mode,e); }
   }
@@ -710,6 +717,7 @@
   toggle('sw-contours',on=>{ state.contours=on; applyMaterial(); });
   $('sel-img').onchange=e=>setImagery(e.target.value);
   $('sl-imgop').oninput=e=>{ state.imgOpacity=+e.target.value/100; $('lbl-imgop').textContent=e.target.value+'%'; if(imgLayer)imgLayer.alpha=state.imgOpacity; };
+  $('sl-fillop').oninput=e=>{ state.fillOpacity=+e.target.value/100; $('lbl-fillop').textContent=e.target.value+'%'; applyMaterial(); };
   toggle('sw-orbit',on=>{ state.orbit=on; if(on) lockOrbit(); else cam.lookAtTransform(C.Matrix4.IDENTITY); });
   toggle('sw-h3',on=>{ state.h3=on; hexEnts.forEach(e=>{e.polyline.show=on;}); });
   toggle('sw-prism',on=>{ state.prism=on; buildAOI(state.lat,state.lon); });
