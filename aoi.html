@@ -100,7 +100,7 @@
   #analytics .note{font-size:8.5px;opacity:0.4;margin-top:7px;letter-spacing:0.06em;}
 
   /* locator */
-  #locator{ bottom:16px; right:16px; width:230px; height:160px; padding:0; overflow:hidden; }
+  #locator{ bottom:16px; left:50%; transform:translateX(-50%); width:230px; height:148px; padding:0; overflow:hidden; }
   #locator iframe{width:100%;height:100%;border:0;filter:grayscale(0.3) brightness(0.85) contrast(1.05);}
   #locator .cap{position:absolute;top:0;left:0;right:0;z-index:2;padding:4px 8px;font-size:7.5px;letter-spacing:0.22em;
     background:linear-gradient(180deg,rgba(0,3,8,0.85),transparent);pointer-events:none;}
@@ -217,13 +217,15 @@
     <select id="sel-img">
       <option value="NONE" selected>NONE</option>
       <option value="OSM">OpenStreetMap</option>
-      <option value="SAT">Satellite &middot; Bing</option>
-      <option value="S2">Sentinel-2 cloudless</option>
+      <option value="ESRI">Satellite &middot; Esri</option>
+      <option value="BING">Satellite &middot; Bing</option>
+      <option value="S2">Copernicus &middot; Sentinel-2</option>
       <option value="LANDSAT">Landsat &middot; NASA GIBS</option>
     </select>
     <div class="slabel" style="margin-top:7px;"><span>OVERLAY OPACITY</span><span id="lbl-imgop">70%</span></div>
     <input type="range" id="sl-imgop" min="0" max="100" step="5" value="70">
     <div class="toggle-row" style="margin-top:8px;"><span>H3 WIREFRAME</span><div class="sw on" id="sw-h3"></div></div>
+    <div class="toggle-row"><span>HEX PRISMS &rarr; SEA LEVEL</span><div class="sw on" id="sw-prism"></div></div>
 
     <h3>NAVIGATION</h3>
     <div class="toggle-row"><span>ORBIT AROUND CENTER</span><div class="sw on" id="sw-orbit"></div></div>
@@ -269,8 +271,8 @@
     mat:'CONTOUR', pal:'SHARP', rampMin:-500, rampMax:7000, autoRamp:true, localMin:null, localMax:null,
     contour:50, exag:1.0, sse:0.3, majorEvery:5, minorWidth:1.0, majorWidth:2.0, colorElev:true,
     day:172, hour:12, light:true, shadow:false,
-    clip:true, imagery:'NONE', imgOpacity:0.7, orbit:true, h3:true,
-    cells:[], center:null, bounds:null, _bs:null, localMean:null,
+    clip:true, imagery:'NONE', imgOpacity:0.7, orbit:true, h3:true, prism:true,
+    cells:[], center:null, bounds:null, _bs:null, localMean:null, cellHeights:[], _buildId:0,
   };
   const PALS = ['SHARP','SOFT','MONO'];
   const RES_AREA = {6:36.129, 7:5.161, 8:0.737};
@@ -311,7 +313,7 @@
   viewer.screenSpaceEventHandler.removeInputAction(C.ScreenSpaceEventType.LEFT_DOUBLE_CLICK);
 
   // ── terrain ─────────────────────────────────────────────────
-  let cellEnts = [], hexEnts = [];
+  let cellEnts = [], hexEnts = [], prismEnts = [];
   async function loadTerrain() {
     setStatus('TERRAIN…');
     try {
@@ -423,15 +425,10 @@
     try{
       let prov=null;
       if(mode==='OSM'){ prov=new C.OpenStreetMapImageryProvider({url:'https://tile.openstreetmap.org/'}); }
-      else if(mode==='SAT'){ prov=await C.createWorldImageryAsync(); }
-      else if(mode==='S2'){ prov=await C.IonImageryProvider.fromAssetId(3954); }   // Sentinel-2 cloudless
-      else if(mode==='LANDSAT'){                                                   // NASA GIBS Landsat WELD (best-effort)
-        prov=new C.WebMapTileServiceImageryProvider({
-          url:'https://gibs.earthdata.nasa.gov/wmts/epsg4326/best/Landsat_WELD_CorrectedReflectance_TrueColor_Global/default/2012-01-01/31.25m/{TileMatrix}/{TileRow}/{TileCol}.jpg',
-          layer:'Landsat_WELD_CorrectedReflectance_TrueColor_Global', style:'default',
-          format:'image/jpeg', tileMatrixSetID:'31.25m', maximumLevel:11,
-          tilingScheme:new C.GeographicTilingScheme(), credit:'NASA GIBS / Landsat WELD' });
-      }
+      else if(mode==='ESRI'){ prov=new C.UrlTemplateImageryProvider({ url:'https://services.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', maximumLevel:19, credit:'Esri World Imagery' }); }
+      else if(mode==='BING'){ prov=await C.createWorldImageryAsync(); }
+      else if(mode==='S2'){ prov=new C.UrlTemplateImageryProvider({ url:'https://tiles.maps.eox.at/wmts/1.0.0/s2cloudless-2020_3857/default/g/{z}/{y}/{x}.jpg', maximumLevel:16, credit:'Sentinel-2 cloudless 2020 by EOX (Copernicus)' }); }
+      else if(mode==='LANDSAT'){ prov=new C.UrlTemplateImageryProvider({ url:'https://gibs.earthdata.nasa.gov/wmts/epsg4326/best/Landsat_WELD_CorrectedReflectance_TrueColor_Global/default/2012-01-01/31.25m/{z}/{y}/{x}.jpg', tilingScheme:new C.GeographicTilingScheme(), maximumLevel:12, tileWidth:512, tileHeight:512, credit:'NASA GIBS / Landsat WELD' }); }
       if(prov){ imgLayer=viewer.imageryLayers.addImageryProvider(prov); imgLayer.alpha=state.imgOpacity; }
     }catch(e){ console.warn('imagery failed:',mode,e); }
   }
@@ -489,10 +486,43 @@
   }
 
   // ── AOI builder ─────────────────────────────────────────────
-  function clearCells(){ cellEnts.forEach(e=>viewer.entities.remove(e)); cellEnts=[]; hexEnts=[]; }
+  function clearPrisms(){ prismEnts.forEach(e=>viewer.entities.remove(e)); prismEnts=[]; }
+  function clearCells(){ cellEnts.forEach(e=>viewer.entities.remove(e)); cellEnts=[]; hexEnts=[]; clearPrisms(); }
+
+  // hexagonal prisms: top at each cell's terrain height, extruded down to sea level (0)
+  async function buildPrisms(){
+    const id=state._buildId, cells=state.cells;
+    let H;
+    if(globe.terrainProvider instanceof C.EllipsoidTerrainProvider){ H=cells.map(()=>0); }
+    else {
+      const cs=cells.map(c=>{ const ll=h3.cellToLatLng(c); return C.Cartographic.fromDegrees(ll[1],ll[0]); });
+      try{ const s=await C.sampleTerrainMostDetailed(globe.terrainProvider,cs); H=s.map(p=>p.height||0); }
+      catch(e){ H=cells.map(()=>0); }
+    }
+    if(id!==state._buildId) return;     // a newer build superseded this
+    state.cellHeights=H; renderPrisms();
+  }
+  function renderPrisms(){
+    clearPrisms();
+    const cells=state.cells, center=state.center, H=state.cellHeights;
+    if(!cells.length||!H.length) return;
+    cells.forEach((cell,i)=>{
+      const isC=cell===center;
+      const b=h3.cellToBoundary(cell); const flat=[];
+      for(const pr of b){ flat.push(pr[1],pr[0]); }
+      const topH=Math.max((H[i]||0)*state.exag, 5);   // extrude from sea level up to (exaggerated) cell height
+      const col=C.Color.fromCssColorString(isC?'#ffaa00':'#00e5ff');
+      const ent=viewer.entities.add({ _cellId:cell, _isC:isC, _pick:true, _prism:true,
+        polygon:{ hierarchy:C.Cartesian3.fromDegreesArray(flat),
+          height:0, extrudedHeight:topH, perPositionHeight:false,
+          material:col.withAlpha(isC?0.16:0.085),
+          outline:true, outlineColor:col.withAlpha(0.6), closeTop:true, closeBottom:true } });
+      prismEnts.push(ent);
+    });
+  }
 
   function buildAOI(lat,lon){
-    state.lat=lat; state.lon=lon; clearCells();
+    state.lat=lat; state.lon=lon; state._buildId++; clearCells();
     const center=h3.latLngToCell(lat,lon,state.res);
     const cells=h3.gridDisk(center,state.k);
     state.center=center; state.cells=cells;
@@ -509,11 +539,14 @@
           material:new C.PolylineGlowMaterialProperty({glowPower:0.25,
             color:C.Color.fromCssColorString(isC?'#ffaa00':'#00e5ff')}),
           show:state.h3 } });
-      const fill=viewer.entities.add({ _cellId:cell, _isC:isC, _pick:true,
-        polygon:{ hierarchy:C.Cartesian3.fromDegreesArray(flat),
-          material:C.Color.fromCssColorString(isC?'#ffaa00':'#00e5ff').withAlpha(isC?0.10:0.045),
-          classificationType:C.ClassificationType.TERRAIN } });
-      cellEnts.push(line,fill); hexEnts.push(line);
+      cellEnts.push(line); hexEnts.push(line);
+      if(!state.prism){
+        const fill=viewer.entities.add({ _cellId:cell, _isC:isC, _pick:true,
+          polygon:{ hierarchy:C.Cartesian3.fromDegreesArray(flat),
+            material:C.Color.fromCssColorString(isC?'#ffaa00':'#00e5ff').withAlpha(isC?0.10:0.045),
+            classificationType:C.ClassificationType.TERRAIN } });
+        cellEnts.push(fill);
+      }
     }
     state.bounds={west:w,south:s,east:e,north:nn};
 
@@ -531,6 +564,7 @@
 
     syncSun();
     runAnalytics();        // enriched derivation
+    if(state.prism) buildPrisms();
   }
 
   // ── isolation: limit-rect + clip-polygon + camera lock ──────
@@ -660,7 +694,7 @@
   $('sl-min').oninput=e=>{ let v=+e.target.value; if(v>state.rampMax-GAP){ v=state.rampMax-GAP; flashWindow(); } state.rampMin=v; updateWindowUI(); if(state.mat==='RAMP'||state.mat==='CONTOUR')applyMaterial(); };
   $('sl-max').oninput=e=>{ let v=+e.target.value; if(v<state.rampMin+GAP){ v=state.rampMin+GAP; flashWindow(); } state.rampMax=v; updateWindowUI(); if(state.mat==='RAMP'||state.mat==='CONTOUR')applyMaterial(); };
   $('sl-contour').oninput=e=>{ state.contour=+e.target.value; $('lbl-contour').textContent=state.contour+' m'; if(state.mat==='CONTOUR')applyMaterial(); };
-  $('sl-exag').oninput=e=>{ state.exag=+e.target.value; $('lbl-exag').textContent=state.exag.toFixed(1)+'\u00d7'; applyExag(); };
+  $('sl-exag').oninput=e=>{ state.exag=+e.target.value; $('lbl-exag').textContent=state.exag.toFixed(1)+'\u00d7'; applyExag(); if(state.prism&&state.cellHeights.length) renderPrisms(); };
   $('sl-sse').oninput=e=>{ state.sse=+e.target.value; $('lbl-sse').textContent=state.sse.toFixed(2); globe.maximumScreenSpaceError=state.sse; };
   globe.maximumScreenSpaceError=state.sse;
 
@@ -675,6 +709,7 @@
   $('sl-imgop').oninput=e=>{ state.imgOpacity=+e.target.value/100; $('lbl-imgop').textContent=e.target.value+'%'; if(imgLayer)imgLayer.alpha=state.imgOpacity; };
   toggle('sw-orbit',on=>{ state.orbit=on; if(on) lockOrbit(); else cam.lookAtTransform(C.Matrix4.IDENTITY); });
   toggle('sw-h3',on=>{ state.h3=on; hexEnts.forEach(e=>{e.polyline.show=on;}); });
+  toggle('sw-prism',on=>{ state.prism=on; buildAOI(state.lat,state.lon); });
 
   $('sl-major').oninput=e=>{ state.majorEvery=+e.target.value; $('lbl-major').textContent=state.majorEvery+'\u00d7'; if(state.mat==='CONTOUR')applyMaterial(); };
   $('sl-minw').oninput=e=>{ state.minorWidth=+e.target.value; $('lbl-minw').textContent=state.minorWidth.toFixed(1)+' px'; if(state.mat==='CONTOUR')applyMaterial(); };
